@@ -1,0 +1,503 @@
+use crate::model::{Key, KeyRecord, Principal};
+use crate::storage::database::{Database, Query, Row};
+use crate::storage::ir::{FilterCond, Op, SrvFilter};
+use crate::tables::{scoped_key, TABLE_KEYS, TABLE_SESSIONS, TABLE_USERS};
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
+use serde_json::{json, Value as Json};
+use sha2::{Digest, Sha256};
+
+pub fn role_rank(role: &str) -> u8 {
+    match role {
+        "customer" => 0,
+        "reader" | "list" => 1,
+        "writer" => 2,
+        "admin" => 3,
+        "owner" => 4,
+        _ => 0,
+    }
+}
+
+fn hex(digest: &[u8]) -> String {
+    const MAP: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(digest.len() * 2);
+    for b in digest {
+        out.push(MAP[(b >> 4) as usize] as char);
+        out.push(MAP[(b & 0x0f) as usize] as char);
+    }
+    out
+}
+
+pub fn hash_key(salt: &str, secret: &str) -> String {
+    let mut h = Sha256::new();
+    h.update(salt.as_bytes());
+    h.update(secret.as_bytes());
+    hex(&h.finalize())
+}
+
+fn board_cond(board_id: &str) -> FilterCond {
+    FilterCond {
+        field: "$.board_id".to_string(),
+        op: Op::Eq,
+        value: Json::String(board_id.to_string()),
+    }
+}
+
+pub fn issue_key(
+    db: &mut dyn Database,
+    board_id: &str,
+    role: &str,
+    writer: Option<&str>,
+    scope: Option<&str>,
+) -> anyhow::Result<(KeyRecord, String)> {
+    let role = if role.is_empty() { "writer" } else { role };
+    if role == "customer" && scope.is_none() {
+        anyhow::bail!("customer keys require a scope (customer id)");
+    }
+    if role != "customer" && scope.is_some() {
+        anyhow::bail!("only customer keys may carry a scope");
+    }
+    let bucket = uuid::Uuid::new_v4().to_string();
+    let salt = uuid::Uuid::new_v4().to_string();
+    let key_secret = uuid::Uuid::new_v4().to_string();
+    let rec = KeyRecord {
+        bucket: bucket.clone(),
+        board_id: board_id.to_string(),
+        key_hash: hash_key(&salt, &key_secret),
+        salt,
+        role: role.to_string(),
+        writer: writer.map(String::from),
+        scope: scope.map(String::from),
+        revoked_at: None,
+    };
+    db.insert(TABLE_KEYS, Row::new(Key::text(&bucket), serde_json::to_value(&rec)?))?;
+    Ok((rec, key_secret))
+}
+
+pub fn list_keys(db: &dyn Database, board_id: &str) -> anyhow::Result<Vec<KeyRecord>> {
+    let q = Query {
+        filter: SrvFilter { conds: vec![board_cond(board_id)] },
+        orders: vec![],
+        limit: usize::MAX,
+        offset: 0,
+    
+        ttl: None,
+    };
+    let mut out = Vec::new();
+    for row in db.query(TABLE_KEYS, &q)?.rows {
+        out.push(serde_json::from_value(row.data)?);
+    }
+    Ok(out)
+}
+
+pub fn get_key(db: &dyn Database, bucket: &str) -> anyhow::Result<Option<KeyRecord>> {
+    let key = Key::text(bucket);
+    let Some(row) = db.get(TABLE_KEYS, &key)? else {
+        return Ok(None);
+    };
+    Ok(serde_json::from_value(row.data)?)
+}
+
+fn find_active_key(db: &dyn Database, board_id: &str, secret: &str) -> anyhow::Result<Option<KeyRecord>> {
+    let q = Query {
+        filter: SrvFilter {
+            conds: vec![
+                board_cond(board_id),
+                FilterCond { field: "$.revoked_at".to_string(), op: Op::Eq, value: Json::Null },
+            ],
+        },
+        orders: vec![],
+        limit: usize::MAX,
+        offset: 0,
+        ttl: None,
+    };
+    for row in db.query(TABLE_KEYS, &q)?.rows {
+        let kr: KeyRecord = serde_json::from_value(row.data)?;
+        if hash_key(&kr.salt, secret) == kr.key_hash {
+            return Ok(Some(kr));
+        }
+    }
+    Ok(None)
+}
+
+pub fn revoke_key(db: &mut dyn Database, bucket: &str) -> anyhow::Result<()> {
+    let filter = SrvFilter {
+        conds: vec![FilterCond { field: "$.bucket".to_string(), op: Op::Eq, value: Json::String(bucket.to_string()) }],
+    };
+    let q = Query { filter: filter.clone(), orders: vec![], limit: 1, offset: 0, ttl: None };
+    let Some(row) = db.query(TABLE_KEYS, &q)?.rows.into_iter().next() else {
+        anyhow::bail!("key {bucket} not found");
+    };
+    let mut kr: KeyRecord = serde_json::from_value(row.data)?;
+    kr.revoked_at = Some(crate::crud::now_str());
+    db.delete(TABLE_KEYS, &filter)?;
+    db.insert(TABLE_KEYS, Row::new(Key::text(bucket), serde_json::to_value(&kr)?))?;
+    Ok(())
+}
+
+pub fn resolve_principal(
+    db: &dyn Database,
+    board_id: &str,
+    token: Option<&str>,
+    scope: Option<&str>,
+) -> anyhow::Result<Principal> {
+    if let Some(t) = token {
+        if t == board_id {
+            return Ok(Principal {
+                id: board_id.to_string(),
+                role: "owner".to_string(),
+                scope: None,
+                writer: None,
+            });
+        }
+        if let Some(u) = resolve_session(db, board_id, t)? {
+            return Ok(Principal {
+                id: u.email.clone(),
+                role: u.role.clone(),
+                scope: None,
+                writer: Some(u.email.clone()),
+            });
+        }
+        if let Some(u) = resolve_jwt_user(board_id, t) {
+            return Ok(Principal {
+                id: u.email.clone(),
+                role: u.role.clone(),
+                scope: None,
+                writer: Some(u.email.clone()),
+            });
+        }
+        if let Some(kr) = find_active_key(db, board_id, t)? {
+            return Ok(Principal {
+                id: kr.bucket.clone(),
+                role: kr.role.clone(),
+                scope: kr.scope.clone().or_else(|| scope.map(String::from)),
+                writer: kr.writer.clone(),
+            });
+        }
+    }
+    Ok(Principal { id: "anon".to_string(), role: "none".to_string(), scope: None, writer: None })
+}
+
+pub fn force_scope(principal: &Principal, payload: &mut serde_json::Value) {
+    if let Some(scope) = &principal.scope {
+        if let Some(obj) = payload.as_object_mut() {
+            obj.insert("customer_id".to_string(), Json::String(scope.clone()));
+        }
+    }
+}
+
+pub fn customer_cond(principal: &Principal) -> Option<FilterCond> {
+    principal.scope.as_ref().map(|s| FilterCond {
+        field: "$.customer_id".to_string(),
+        op: Op::Eq,
+        value: Json::String(s.clone()),
+    })
+}
+
+pub fn require_role(principal: &Principal, min: u8) -> anyhow::Result<()> {
+    if role_rank(&principal.role) < min {
+        anyhow::bail!("forbidden: requires role rank {min} (principal role: {})", principal.role);
+    }
+    Ok(())
+}
+
+// ---- user auth (password login + sessions) --------------------------------
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct User {
+    pub email: String,
+    pub board_id: String,
+    pub role: String,
+    pub created_at: String,
+}
+
+const SESSION_TTL_SECS: i64 = 60 * 60 * 24 * 7;
+
+fn now_iso() -> String {
+    crate::crud::now_str()
+}
+
+fn expires_iso() -> String {
+    crate::crud::subtract_seconds(&now_iso(), -SESSION_TTL_SECS)
+}
+
+fn user_key(board_id: &str, email: &str) -> Key {
+    Key::text(scoped_key(board_id, &email.to_lowercase()))
+}
+
+fn find_user(db: &dyn Database, board_id: &str, email: &str) -> anyhow::Result<Option<Json>> {
+    Ok(db.get(TABLE_USERS, &user_key(board_id, email))?.map(|r| r.data))
+}
+
+/// List the users of a board (email, role, created_at — never the hash).
+pub fn user_list(db: &dyn Database, board_id: &str) -> anyhow::Result<Vec<User>> {
+    let q = Query {
+        filter: SrvFilter { conds: vec![board_cond(board_id)] },
+        orders: vec![],
+        limit: usize::MAX,
+        offset: 0,
+        ttl: None,
+    };
+    let mut out = Vec::new();
+    for row in db.query(TABLE_USERS, &q)?.rows {
+        out.push(serde_json::from_value(row.data)?);
+    }
+    Ok(out)
+}
+
+/// Change a user's role. The caller must be admin/owner. Also expires the
+/// user's sessions so stale tokens don't keep the old role.
+pub fn user_set_role(
+    db: &mut dyn Database,
+    board_id: &str,
+    email: &str,
+    role: &str,
+    caller: &Principal,
+) -> anyhow::Result<User> {
+    require_role(caller, role_rank("admin"))?;
+    let email = email.to_lowercase();
+    let key = user_key(board_id, &email);
+    let Some(row) = db.get(TABLE_USERS, &key)? else {
+        anyhow::bail!("user {email} not found");
+    };
+    let mut data = row.data;
+    data["role"] = Json::String(role.to_string());
+    db.update(TABLE_USERS, &key, &data)?;
+    // Expire the user's sessions (delete them).
+    let q = Query {
+        filter: SrvFilter {
+            conds: vec![
+                board_cond(board_id),
+                FilterCond { field: "$.email".to_string(), op: Op::Eq, value: Json::String(email.clone()) },
+            ],
+        },
+        orders: vec![],
+        limit: usize::MAX,
+        offset: 0,
+        ttl: None,
+    };
+    db.delete(TABLE_SESSIONS, &q.filter)?;
+    let user: User = serde_json::from_value(data)?;
+    Ok(user)
+}
+
+/// Create a user. `role` is clamped: only an admin/owner caller may set a role
+/// above reader; otherwise the new user is a reader.
+/// Two modes, chosen per-call:
+/// - `password_hash: Some(hash)` — import an existing bcrypt hash verbatim
+///   (migration from e.g. Supabase). Only accepted when the caller is
+///   admin/owner (same gate as the role clamp), and the hash must look like a
+///   bcrypt hash (starts with `$2`).
+/// - `password_hash: None` — the engine bcrypt-hashes `password` (>= 6 chars).
+pub fn user_signup(
+    db: &mut dyn Database,
+    board_id: &str,
+    email: &str,
+    password: &str,
+    password_hash: Option<&str>,
+    role: &str,
+    caller: &Principal,
+) -> anyhow::Result<User> {
+    if email.is_empty() {
+        anyhow::bail!("email is required");
+    }
+    let email = email.to_lowercase();
+    if find_user(db, board_id, &email)?.is_some() {
+        anyhow::bail!("user already exists");
+    }
+    let granted = if role_rank(&caller.role) >= role_rank("admin") { role } else { "reader" };
+    let password_hash = match password_hash {
+        Some(hash) => {
+            require_role(caller, role_rank("admin"))?;
+            if !hash.starts_with("$2") {
+                anyhow::bail!("password_hash must be a bcrypt hash (starts with $2)");
+            }
+            hash.to_string()
+        }
+        None => {
+            if password.len() < 6 {
+                anyhow::bail!("a password of at least 6 characters is required");
+            }
+            bcrypt::hash(password, bcrypt::DEFAULT_COST)?
+        }
+    };
+    let user = User {
+        email: email.clone(),
+        board_id: board_id.to_string(),
+        role: granted.to_string(),
+        created_at: now_iso(),
+    };
+    let mut data = serde_json::to_value(&user)?;
+    data["password_hash"] = Json::String(password_hash);
+    db.insert(TABLE_USERS, Row::new(user_key(board_id, &email), data))?;
+    Ok(user)
+}
+
+/// Verify credentials and create a session token plus an optional signed JWT.
+/// Returns `(opaque_token, jwt)`. The opaque token is revocable via logout; the
+/// JWT is a self-contained HS256-signed credential (expiry 7 days).
+pub fn user_login(
+    db: &mut dyn Database,
+    board_id: &str,
+    email: &str,
+    password: &str,
+) -> anyhow::Result<(String, String)> {
+    let row = find_user(db, board_id, email)?
+        .ok_or_else(|| anyhow::anyhow!("invalid email or password"))?;
+    let stored = row
+        .get("password_hash")
+        .and_then(|h| h.as_str())
+        .ok_or_else(|| anyhow::anyhow!("invalid email or password"))?;
+    if !bcrypt::verify(password, stored)? {
+        anyhow::bail!("invalid email or password");
+    }
+    let email = row["email"].as_str().unwrap_or(email).to_string();
+    let role = row["role"].as_str().unwrap_or("reader").to_string();
+    issue_session(db, board_id, &email, &role)
+}
+
+/// Create a session (token + JWT) for an already-verified user. Used by both
+/// password login and OAuth (SSO) login.
+pub fn issue_session(
+    db: &mut dyn Database,
+    board_id: &str,
+    email: &str,
+    role: &str,
+) -> anyhow::Result<(String, String)> {
+    let now = now_iso();
+    let token = uuid::Uuid::new_v4().to_string();
+    let session = json!({
+        "token": token,
+        "board_id": board_id,
+        "email": email,
+        "role": role,
+        "expires_at": expires_iso(),
+        "created_at": now,
+    });
+    db.insert(TABLE_SESSIONS, Row::new(Key::text(&token), session))?;
+    let jwt = issue_jwt(board_id, email, role);
+    Ok((token, jwt))
+}
+
+fn issue_jwt(board_id: &str, email: &str, role: &str) -> String {
+    let claims = json!({
+        "sub": email,
+        "board": board_id,
+        "role": role,
+        "iat": now_iso(),
+        "exp": expires_iso(),
+    });
+    sign_jwt(&claims, &crate::secrets::master_key())
+}
+
+fn resolve_jwt_user(board_id: &str, token: &str) -> Option<User> {
+    let claims = verify_jwt(token, &crate::secrets::master_key())?;
+    if claims.get("board").and_then(|b| b.as_str()) != Some(board_id) {
+        return None;
+    }
+    let exp = claims.get("exp").and_then(|e| e.as_str()).unwrap_or("");
+    if !exp.is_empty() && exp < now_iso().as_str() {
+        return None;
+    }
+    let email = claims.get("sub").and_then(|s| s.as_str())?.to_string();
+    let role = claims.get("role").and_then(|r| r.as_str()).unwrap_or("reader").to_string();
+    Some(User { email, board_id: board_id.to_string(), role, created_at: now_iso() })
+}
+
+fn b64url(data: &[u8]) -> String {
+    URL_SAFE_NO_PAD.encode(data)
+}
+
+fn hmac_sha256(key: &[u8], data: &[u8]) -> [u8; 32] {
+    const BLOCK: usize = 64;
+    let mut k = key.to_vec();
+    if k.len() > BLOCK {
+        k = Sha256::digest(&k).to_vec();
+    }
+    k.resize(BLOCK, 0);
+    let mut ipad = [0x36u8; BLOCK];
+    let mut opad = [0x5cu8; BLOCK];
+    for i in 0..BLOCK {
+        ipad[i] ^= k[i];
+        opad[i] ^= k[i];
+    }
+    let mut inner = Vec::with_capacity(BLOCK + data.len());
+    inner.extend_from_slice(&ipad);
+    inner.extend_from_slice(data);
+    let inner = Sha256::digest(&inner);
+    let mut outer = Vec::with_capacity(BLOCK + 32);
+    outer.extend_from_slice(&opad);
+    outer.extend_from_slice(&inner);
+    Sha256::digest(&outer).into()
+}
+
+fn sign_jwt(claims: &Json, secret: &[u8; 32]) -> String {
+    let header = json!({ "alg": "HS256", "typ": "JWT" });
+    let h = b64url(header.to_string().as_bytes());
+    let p = b64url(claims.to_string().as_bytes());
+    let input = format!("{h}.{p}");
+    let sig = b64url(&hmac_sha256(secret, input.as_bytes()));
+    format!("{input}.{sig}")
+}
+
+fn verify_jwt(token: &str, secret: &[u8; 32]) -> Option<Json> {
+    let mut parts = token.split('.');
+    let h = parts.next()?;
+    let p = parts.next()?;
+    let sig = parts.next()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    let input = format!("{h}.{p}");
+    if sig != b64url(&hmac_sha256(secret, input.as_bytes())) {
+        return None;
+    }
+    let payload = URL_SAFE_NO_PAD.decode(p).ok()?;
+    serde_json::from_slice(&payload).ok()
+}
+
+/// Resolve a session token to its user, if present and unexpired.
+pub fn resolve_session(
+    db: &dyn Database,
+    board_id: &str,
+    token: &str,
+) -> anyhow::Result<Option<User>> {
+    let Some(row) = db.get(TABLE_SESSIONS, &Key::text(token))? else {
+        return Ok(None);
+    };
+    let s = row.data;
+    if s.get("board_id").and_then(|b| b.as_str()) != Some(board_id) {
+        return Ok(None);
+    }
+    if let Some(exp) = s.get("expires_at").and_then(|e| e.as_str()) {
+        if !exp.is_empty() && exp < now_iso().as_str() {
+            return Ok(None);
+        }
+    }
+    let email = s.get("email").and_then(|e| e.as_str()).unwrap_or("").to_string();
+    let role = s.get("role").and_then(|r| r.as_str()).unwrap_or("reader").to_string();
+    Ok(Some(User {
+        email,
+        board_id: board_id.to_string(),
+        role,
+        created_at: now_iso(),
+    }))
+}
+
+/// Revoke a session token.
+pub fn user_logout(db: &mut dyn Database, token: &str) -> anyhow::Result<bool> {
+    let existed = db.get(TABLE_SESSIONS, &Key::text(token))?.is_some();
+    if existed {
+        db.delete(
+            TABLE_SESSIONS,
+            &SrvFilter {
+                conds: vec![FilterCond {
+                    field: "$.token".to_string(),
+                    op: Op::Eq,
+                    value: Json::String(token.to_string()),
+                }],
+            },
+        )?;
+    }
+    Ok(existed)
+}

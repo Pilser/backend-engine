@@ -1,0 +1,44 @@
+# serverless-worker — single tenant (one Worker = one app/user).
+# Deploy with: scripts/sync-worker.sh  (or CI: Deploy workflow dispatch)
+
+name = "serverless-worker"
+main = "build/worker/shim.mjs"
+compatibility_date = "2026-09-01"
+
+[build]
+command = "worker-build --release"
+
+# Plain (non-secret) vars. Secrets NEVER go here — use `wrangler secret put`
+# (SECRET_KEY, WORKER_KEY) or scripts/sync-worker.sh.
+[vars]
+ENVIRONMENT = "production"
+TENANT = "singleton"
+HTTP_TIMEOUT_MS = "15000"
+# Public URL of this worker (no port — Workers route by URL, not host:port).
+# Update after first deploy; used for self-referencing webhook callbacks.
+WORKER_URL = "https://serverless-worker.<account>.workers.dev"
+
+# Storage = bindings, NOT urls. There is intentionally no DB/HOST/PORT here:
+# D1 replaces SRV_DB/SRV_HELIX_URL, R2 replaces SRV_DATA_DIR.
+[[d1_databases]]
+binding = "DB"
+database_name = "serverless-worker"
+database_id = "REPLACE_ME_RUN_WRANGLER_D1_CREATE"
+
+[[r2_buckets]]
+binding = "STORE"
+bucket_name = "serverless-worker-store"
+
+[[durable_objects.bindings]]
+name = "TENANT_DO"
+class_name = "TenantDO"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["TenantDO"]
+
+[[analytics_engine_datasets]]
+binding = "USAGE"
+
+[triggers]
+crons = ["*/5 * * * *"]

@@ -1,0 +1,31 @@
+# Rust
+target/
+**/target/
+*.rs.bk
+# NOTE: Cargo.lock IS committed (reproducible CI builds of the deploy binary).
+
+# worker-build / wrangler output
+build/
+.wrangler/
+wrangler/*.json
+
+# WASM artifacts (CI produces these; never commit binaries)
+*.wasm
+
+# Local secrets — NEVER commit. CI/deploy read from env or GitHub Secrets.
+.env
+.env.*
+!.env.example
+.dev.vars
+.dev.vars.*
+*.pem
+*.key
+token*
+*token*
+
+# Node (wrangler / worker-build tooling)
+node_modules/
+
+# Logs / OS
+*.log
+.DS_Store

@@ -1,0 +1,75 @@
+# CI: verify native build, enforce WASM-compat gates, and (once
+# crates/worker exists) produce the deployable `worker-dist/` artifact.
+# The Deploy workflow / scripts/sync-worker.sh consume that artifact —
+# no binary is ever built on a laptop and hand-uploaded.
+
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  native-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --workspace --locked
+
+  wasm-gate:
+    # The edge binary must not pull server runtimes. Fails the build early
+    # if anyone re-adds tokio/hyper/reqwest/bcrypt/jsonschema to the
+    # worker's dependency graph (see WORKER-PORT-GUIDE.md §3).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check -p engine --target wasm32-unknown-unknown --locked
+      - name: forbidden crates in worker graph
+        run: |
+          if [ -f crates/worker/Cargo.toml ]; then
+            PKG="-p worker"
+          else
+            PKG="-p engine"
+          fi
+          TREE=$(cargo tree --target wasm32-unknown-unknown -e no-dev $PKG 2>/dev/null || true)
+          echo "$TREE" | grep -Ei ' (tokio|hyper|reqwest|bcrypt|jsonschema|jsonwebtoken) v' \
+            && { echo "::error::forbidden crate in WASM graph (see WORKER-PORT-GUIDE.md §3)"; exit 1; } \
+            || echo "WASM graph clean."
+      - name: wasm size gate (engine lib, early signal)
+        run: |
+          ls -la target/wasm32-unknown-unknown/debug/*.wasm 2>/dev/null || echo "no wasm lib yet (ok until worker crate lands)"
+
+  worker-build:
+    # Produces the binary Cloudflare runs. Skipped until crates/worker lands.
+    runs-on: ubuntu-latest
+    needs: [native-check, wasm-gate]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install worker-build --locked
+      - run: npm i -g wrangler
+      - name: build
+        if: hashFiles('crates/worker/Cargo.toml') != ''
+        run: worker-build --release
+      - name: upload worker-dist
+        if: hashFiles('crates/worker/Cargo.toml') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: worker-dist
+          path: |
+            build/worker/shim.mjs
+            build/worker/*.wasm
+          if-no-files-found: error

@@ -1,0 +1,42 @@
+# Deploy: rebuild (or reuse latest CI artifact) and push to Cloudflare.
+# Trigger: Actions tab -> Deploy -> Run workflow (choose env).
+# Required GitHub Secrets: CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID.
+# Optional: SECRET_KEY, WORKER_KEY (synced via `wrangler secret put`;
+# never stored in the repo or the artifact).
+
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      env:
+        description: "wrangler env"
+        default: "production"
+        required: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install worker-build --locked
+      - run: npm i -g wrangler
+      - name: sync secrets (from GitHub Secrets, never committed)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          chmod +x scripts/sync-worker.sh
+          [ -n "${{ secrets.SECRET_KEY }}" ] && printf '%s' "${{ secrets.SECRET_KEY }}" | wrangler secret put SECRET_KEY --env "${{ inputs.env }}" || echo "skip SECRET_KEY (secret not set)"
+          [ -n "${{ secrets.WORKER_KEY }}" ] && printf '%s' "${{ secrets.WORKER_KEY }}" | wrangler secret put WORKER_KEY --env "${{ inputs.env }}" || echo "skip WORKER_KEY (secret not set)"
+      - name: build + deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          worker-build --release
+          wrangler deploy --env "${{ inputs.env }}"

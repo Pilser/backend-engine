@@ -1,0 +1,53 @@
+[workspace]
+resolver = "2"
+members = ["crates/engine", "crates/server", "crates/mcp", "crates/cli", "crates/helixdb"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+thiserror = "1"
+chrono = { version = "0.4", features = ["serde"] }
+sha2 = "0.11"
+base64 = "0.23"
+aes-gcm = "0.11"
+rand = "0.10"
+uuid = { version = "1", features = ["v4"] }
+bcrypt = "0.19"
+jsonwebtoken = "10"
+jsonschema = { version = "0.49", default-features = false }
+tracing = "0.1"
+
+# ---- build speed (memory-constrained dev machine) ----------------------
+[profile.dev]
+# Keep incremental for fast re-checks of our own crates.
+incremental = true
+# Drop full debuginfo in dev: much less memory during codegen + linking.
+debug = 0
+# Reduce how much LLVM splits codegen (less memory, marginally slower).
+codegen-units = 16
+# One opt-level for our crates is a good balance for tests/local runs.
+opt-level = 1
+
+# Third-party deps: compile once with 2 so re-builds of OUR crates stay fast.
+[profile.dev.package."*"]
+opt-level = 2
+
+# Tests inherit dev profile but often need debuginfo to print backtraces.
+[profile.test]
+debug = 1
+
+# ---- release (memory-constrained dev machine) ----------------------------
+# opt-level 2 (not 3) keeps codegen fast and memory sane; no LTO to avoid
+# peak-memory spikes during linking of the hyper/tokio/jsonschema stack.
+[profile.release]
+opt-level = 2
+debug = false
+codegen-units = 16
+lto = false
+incremental = false

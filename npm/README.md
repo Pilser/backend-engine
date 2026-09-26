@@ -16,7 +16,7 @@ project and fill in your ids:
 
 ```toml
 name = "my-app"
-main = "node_modules/@pilser/serverless-worker/shim.mjs"
+main = "node_modules/@pilser/serverless-worker/index.js"
 compatibility_date = "2026-09-01"
 
 [vars]

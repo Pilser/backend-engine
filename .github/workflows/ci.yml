@@ -82,11 +82,13 @@ jobs:
       - run: npm i -g wrangler
       - name: build
         if: hashFiles('crates/worker/Cargo.toml') != ''
-        run: worker-build --release
+        # Virtual workspace: worker-build reads ONE crate manifest, and joins
+        # out-dir onto the crate dir — hence the crate path + absolute out dir.
+        run: worker-build --release --out-dir "$PWD/build/serverless-worker" "$PWD/crates/worker"
       - name: wasm size gate (64 MiB Workers limit)
         if: hashFiles('crates/worker/Cargo.toml') != ''
         run: |
-          WASM=$(ls build/serverless-worker/*.wasm | head -1)
+          WASM=build/serverless-worker/index_bg.wasm
           SIZE=$(stat -c%s "$WASM")
           echo "wasm: $WASM ($SIZE bytes)"
           if [ "$SIZE" -gt 62914560 ]; then
@@ -100,6 +102,6 @@ jobs:
         with:
           name: worker-dist
           path: |
-            build/serverless-worker/shim.mjs
-            build/serverless-worker/*.wasm
+            build/serverless-worker/index.js
+            build/serverless-worker/index_bg.wasm
           if-no-files-found: error

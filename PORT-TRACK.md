@@ -107,7 +107,7 @@ Legend: ⬜ pending · 🔨 in progress · ✅ done · ⚠️ blocked · ❌ dro
 - [x] `lib.rs`: `#[event(fetch)]` → router; `#[event(scheduled)]` stub
 - [x] `router.rs`: `/healthz`, `/api/version`, 404 JSON (CORS + full surface in Phase 6)
 - [x] `tenant_do.rs`: `TenantDO` stub (`DurableObject::new` + `fetch`)
-- [x] `wrangler.toml` main → `build/serverless-worker/shim.mjs` (worker-build names by package)
+- [x] `wrangler.toml` main → `build/serverless-worker/index.js` (current worker-build emits index.js + index_bg.wasm)
 - [x] CI: native check/test exclude the wasm-only shell; wasm-gate checks all three
       crates with split forbidden-crate greps (tokio allowed only in shell graph)
 - [x] `cargo check -p serverless-worker --target wasm32-unknown-unknown` green
@@ -233,8 +233,10 @@ curl -H "$K" -X POST $BASE/api/secrets -d '{"name":"OAUTH_CLIENT_ID","value":"<i
 
 ## Packaging (2026-09-26) — npm binary distribution
 
-- The shippable artifact is the worker-build output (`shim.mjs` + `.wasm`),
-  published to npm as `@pilser/serverless-worker` on version tags.
+- The shippable artifact is the worker-build output (`index.js` +
+  `index_bg.wasm`), published to npm as `@pilser/serverless-worker` on
+  version tags. worker-build runs with an explicit crate path + absolute
+  out dir (virtual workspaces have no root package for it to read).
 - Consumers: `npm i @pilser/serverless-worker`, point `wrangler.toml main`
   at the package shim, add their bindings/secrets, `wrangler deploy`.
   Works identically under bun (`bun add`, same registry).

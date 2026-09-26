@@ -2,11 +2,15 @@
 # Deploy with: scripts/sync-worker.sh  (or CI: Deploy workflow dispatch)
 
 name = "serverless-worker"
-main = "build/serverless-worker/shim.mjs"
+# worker-build (this version) emits index.js + index_bg.wasm — not shim.mjs.
+main = "build/serverless-worker/index.js"
 compatibility_date = "2026-09-01"
 
+# NOTE: this repo is a virtual workspace, but worker-build reads a single
+# crate manifest — hence the crate path. Out dir is absolute because
+# worker-build joins it onto the crate dir.
 [build]
-command = "worker-build --release"
+command = "worker-build --release --out-dir \"$PWD/build/serverless-worker\" \"$PWD/crates/worker\""
 
 # Plain (non-secret) vars. Secrets NEVER go here — use `wrangler secret put`
 # (SECRET_KEY, WORKER_KEY) or scripts/sync-worker.sh.

@@ -60,17 +60,17 @@ echo "== ensuring webhook queue exists =="
 wrangler queues create webhook-deliveries 2>/dev/null || echo "(queue already exists or creation deferred — inline delivery fallback applies)"
 
 if [[ -n "$ARTIFACT" ]]; then
-  [[ -f "$ARTIFACT/shim.mjs" ]] || { echo "artifact dir $ARTIFACT missing shim.mjs" >&2; exit 1; }
+  [[ -f "$ARTIFACT/index.js" ]] || { echo "artifact dir $ARTIFACT missing index.js" >&2; exit 1; }
   echo "== deploying prebuilt artifact $ARTIFACT =="
   mkdir -p build/serverless-worker
-  cp "$ARTIFACT/shim.mjs" build/serverless-worker/shim.mjs
-  [[ -f "$ARTIFACT/serverless-worker.wasm" ]] && cp "$ARTIFACT/serverless-worker.wasm" build/serverless-worker/serverless-worker.wasm
+  cp "$ARTIFACT/index.js" build/serverless-worker/index.js
+  [[ -f "$ARTIFACT/index_bg.wasm" ]] && cp "$ARTIFACT/index_bg.wasm" build/serverless-worker/index_bg.wasm
   SKIP_BUILD=1
 fi
 
 if [[ "$SKIP_BUILD" == "0" ]]; then
   echo "== building wasm (worker-build --release) =="
-  worker-build --release
+  worker-build --release --out-dir "$PWD/build/serverless-worker" "$PWD/crates/worker"
 fi
 
 echo "== deploying to Cloudflare (--env $ENV) =="

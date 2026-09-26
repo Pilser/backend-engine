@@ -30,8 +30,12 @@ fn comparison_and_logic() {
 
 #[test]
 fn ternary_is_right_associative() {
-    assert_eq!(evaluate("true ? 1 : 0", &json!({})).unwrap(), json!(1.0));
-    assert_eq!(evaluate("false ? 1 : 0", &json!({})).unwrap(), json!(0.0));
+    // Integer literals stay integers (suite convention: only float-producing
+    // ops yield floats) — the old 1.0/0.0 expectations contradicted this.
+    assert_eq!(evaluate("true ? 1 : 0", &json!({})).unwrap(), json!(1));
+    assert_eq!(evaluate("false ? 1 : 0", &json!({})).unwrap(), json!(0));
+    // Right-nested else binds tighter: false ? 1 : (true ? 2 : 3) == 2.
+    assert_eq!(evaluate("false ? 1 : true ? 2 : 3", &json!({})).unwrap(), json!(2));
 }
 
 #[test]

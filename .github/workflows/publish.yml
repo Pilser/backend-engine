@@ -58,7 +58,9 @@ jobs:
           WASM=build/serverless-worker/index_bg.wasm
           SIZE=$(stat -c%s "$WASM")
           echo "wasm: $WASM ($SIZE bytes)"
-          [ "$SIZE" -gt 62914560 ] && { echo "::error::wasm exceeds 64 MiB"; exit 1; }
+          if [ "$SIZE" -gt 62914560 ]; then
+            echo "::error::wasm $SIZE bytes exceeds the 64 MiB Workers limit"; exit 1;
+          fi
       - name: "publish to npm (also serves bun: bun uses the npm registry)"
         working-directory: build/serverless-worker
         env:

@@ -1,9 +1,19 @@
 # @pilser/serverless-worker
 
-A complete backend as **one Cloudflare Worker = one app**: database tables,
-auth keys + users, file storage, cron jobs, event recipes, webhooks, static
-hosting, MCP control plane. You declare behavior in JSON over HTTP — there is
-no backend code to write.
+**Backend as a dependency — not a service.** One install gives your app a
+complete serverless backend engine: database tables, auth keys + users,
+file storage, cron jobs, event automations (recipes), webhooks, static
+hosting, AI proxy, MCP control plane. One Cloudflare Worker = one app.
+
+**You don't write backend code.** No server files, no routes, no ORM, no
+framework to learn. You declare behavior in JSON over HTTP — create a
+table, submit a record, schedule a cron, wire an automation — all API
+calls from your frontend or scripts. If you can `curl`, you can backend.
+
+**It's free.** MIT-licensed and runs on Cloudflare's free tier (Workers
++ D1 + R2). No per-seat pricing, no hosted-backend bill, no vendor
+lock-in — your Cloudflare account, your data, your limits. Fork it,
+self-host it, it's yours.
 
 ## Install
 

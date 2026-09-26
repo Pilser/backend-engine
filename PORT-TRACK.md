@@ -231,6 +231,13 @@ curl -H "$K" -X POST $BASE/api/secrets -d '{"name":"OAUTH_CLIENT_ID","value":"<i
 - [x] fixed adjacent leak: MCP `keys.show` exposed `key_hash`/`salt`
 - [x] tests updated; native + `--tests` + wasm green, graphs clean
 
+## CI incident log, continued (2026-09-26)
+
+- `worker-build` failed in wasm-bindgen: "externref table required for
+  catch wrappers". Root cause: my `[profile.release] strip = true`
+  (workers-rs#1014 — wasm-bindgen ≥0.2.125 needs the table). Removed
+  `strip`; wasm-opt still shrinks. Lesson: never strip release wasm.
+
 ## Packaging (2026-09-26) — npm binary distribution
 
 - The shippable artifact is the worker-build output (`index.js` +

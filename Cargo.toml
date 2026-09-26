@@ -57,12 +57,15 @@ debug = 1
 
 # ---- release (edge binary: size is the constraint) -----------------------
 # Release builds run in CI only (AGENTS.md) for `worker-build --release`.
-# Workers limit: 64 MiB per script — opt-z + thin LTO + strip keep us far
-# under it (thin over fat LTO to bound CI link time; revisit if >30 MiB).
+# Workers limit: 64 MiB per script — opt-z + thin LTO keep us far under it
+# (thin over fat LTO to bound CI link time; revisit if >30 MiB).
+# NOTE: never set `strip` here — stripping removes the externref table that
+# wasm-bindgen needs for catch wrappers (workers-rs#1014); the build fails
+# with "externref table required for catch wrappers". wasm-opt (run by
+# worker-build) already shrinks the binary.
 [profile.release]
 opt-level = "z"
 debug = false
 codegen-units = 1
 lto = "thin"
-strip = true
 incremental = false

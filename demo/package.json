@@ -1,0 +1,13 @@
+{
+  "name": "serverless-worker-demo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Example app: a full backend via @pilser/serverless-worker — no backend code.",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "@pilser/serverless-worker": "^0.1.0"
+  }
+}

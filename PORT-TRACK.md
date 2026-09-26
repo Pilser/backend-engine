@@ -5,10 +5,9 @@
 > Source of truth for WHAT/WHY: `WORKER-PORT-GUIDE.md`. This file tracks execution status.
 > Rule: local verification is `cargo check` only; builds/tests/wasm gates run in CI (`AGENTS.md`).
 
-_Last updated: 2026-09-26 — ALL PHASES + Phase 10 code-complete. Every local
-gate green (native + `--tests` + wasm for all crates, both forbidden-crate
-greps). Remaining: CI green on push + live matrix (need your push +
-Cloudflare account)._
+_Last updated: 2026-09-26 — PUSHED to `main` (`5ee6fc3`), CI running. All local
+gates were green pre-push (native + `--tests` + wasm, both forbidden-crate
+greps). Remaining: CI verdict + live matrix (needs your Cloudflare account)._
 
 ## Phase status
 

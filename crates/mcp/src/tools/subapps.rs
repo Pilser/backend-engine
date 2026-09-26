@@ -3,13 +3,12 @@ use engine::model::Principal;
 use engine::ServerlessEngine;
 use serde_json::{json, Value as Json};
 
-pub fn list(
+pub async fn list(
     engine: &ServerlessEngine,
     _principal: &Principal,
-    arguments: &Json,
+    _arguments: &Json,
 ) -> Result<Json, String> {
-    let board = arg_str(arguments, "board")?;
-    let subs = engine.list_subapps(board).map_err(|e| e.to_string())?;
+    let subs = engine.list_subapps().await.map_err(|e| e.to_string())?;
     let out: Vec<Json> = subs
         .into_iter()
         .map(|s| {
@@ -24,18 +23,16 @@ pub fn list(
     ok(json!({ "subapps": out }))
 }
 
-pub fn remove(
+pub async fn remove(
     engine: &mut ServerlessEngine,
     _principal: &Principal,
     arguments: &Json,
 ) -> Result<Json, String> {
-    let board = arg_str(arguments, "board")?;
     let slug = arg_str(arguments, "slug")?;
-    let removed = engine.remove_subapp(board, slug).map_err(|e| e.to_string())?;
+    let removed = engine.remove_subapp(slug).await.map_err(|e| e.to_string())?;
     // --prune also deletes every asset under the slug's folder.
     let pruned = if arguments.get("prune").and_then(|b| b.as_bool()).unwrap_or(false) {
-        engine
-            .delete_asset_prefix(board, slug)
+        engine.delete_asset_prefix(slug).await
             .map_err(|e| e.to_string())?
     } else {
         0

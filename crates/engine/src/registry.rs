@@ -7,7 +7,6 @@ pub enum ArgType {
     Json,
     Path,
     Url,
-    Board,
     Seq,
     Name,
 }
@@ -85,231 +84,65 @@ impl CommandSpec {
 pub fn registry() -> Vec<CommandSpec> {
     let mut specs = Vec::new();
 
-    specs.push(CommandSpec {
-        group: "apps".into(),
-        verb: "create".into(),
-        summary: "Create a new serverless app (board).".into(),
-        description: "Creates a board owned by the caller and returns its id.".into(),
-        positional: vec![ArgSpec {
-            name: "title".into(),
-            r#type: ArgType::Str,
-            required: true,
-            help: "Human label for the app.".into(),
-        }],
-        flags: vec![
-            FlagSpec {
-                name: "schema".into(),
-                r#type: FlagType::Json,
-                default: None,
-                allowed: vec![],
-                repeatable: false,
-                help: "Optional JSON Schema (Draft 2020-12).".into(),
-                conflicts: vec![],
-                requires: vec![],
-            },
-            FlagSpec {
-                name: "unique_key".into(),
-                r#type: FlagType::Path,
-                default: None,
-                allowed: vec![],
-                repeatable: false,
-                help: "JSON path used for upsert conflict detection.".into(),
-                conflicts: vec![],
-                requires: vec![],
-            },
-        ],
-        body_json: None,
-        response: serde_json::json!({ "ok": true, "board": "b_<id>", "title": "<title>" }),
-        auth: Role::Owner,
-        destructive: false,
-        dry_run: false,
-        examples: vec![Example {
-            args: "apps create 'my app'".into(),
-            description: "Create a board.".into(),
-            response: serde_json::json!({ "ok": true, "board": "b_abcd1234", "title": "my app" }),
-        }],
-        see_also: vec!["apps.list".into(), "apps.show".into(), "apps.delete".into()],
-        danger_notes: None,
-    });
+    // Single tenant: one Worker = one app. No create/list/delete — the app IS
+    // the deployment. `show`/`update`/`resources` act on the tenant row.
 
     specs.push(CommandSpec {
-        group: "apps".into(),
-        verb: "list".into(),
-        summary: "List apps owned by the caller.".into(),
-        description: "Returns the caller's boards (id + title).".into(),
+        group: "tenant".into(),
+        verb: "show".into(),
+        summary: "Show the app's config.".into(),
+        description: "Returns the tenant record (title, public_reads, rate, TTL defaults, audit flag).".into(),
         positional: vec![],
         flags: vec![],
         body_json: None,
-        response: serde_json::json!({ "ok": true, "apps": [{ "board": "b_<id>", "title": "<title>" }] }),
+        response: serde_json::json!({ "ok": true, "tenant": { "title": "<title>" } }),
         auth: Role::Owner,
         destructive: false,
         dry_run: false,
         examples: vec![Example {
-            args: "apps list".into(),
-            description: "List my boards.".into(),
-            response: serde_json::json!({ "ok": true, "apps": [{ "board": "b_abcd1234", "title": "my app" }] }),
+            args: "apps show".into(),
+            description: "Show the app config.".into(),
+            response: serde_json::json!({ "ok": true, "tenant": { "title": "my app" } }),
         }],
-        see_also: vec!["apps.create".into(), "apps.show".into()],
+        see_also: vec!["tenant.update".into()],
         danger_notes: None,
     });
 
     specs.push(CommandSpec {
-        group: "apps".into(),
-        verb: "show".into(),
-        summary: "Show an app's full config.".into(),
-        description: "Returns the board record including schema, keys config, TTL and more.".into(),
-        positional: vec![ArgSpec {
-            name: "board".into(),
-            r#type: ArgType::Board,
-            required: true,
-            help: "The board id.".into(),
-        }],
-        flags: vec![],
-        body_json: None,
-        response: serde_json::json!({ "ok": true, "board": { "board_id": "b_<id>", "title": "<title>" } }),
-        auth: Role::Owner,
-        destructive: false,
-        dry_run: false,
-        examples: vec![Example {
-            args: "apps show b_abcd1234".into(),
-            description: "Show a board.".into(),
-            response: serde_json::json!({ "ok": true, "board": { "board_id": "b_abcd1234", "title": "my app" } }),
-        }],
-        see_also: vec!["apps.list".into(), "apps.delete".into()],
-        danger_notes: None,
-    });
-
-    specs.push(CommandSpec {
-        group: "apps".into(),
-        verb: "delete".into(),
-        summary: "Delete an app and all its records.".into(),
-        description: "Permanently removes the board and every record, recipe, key and file on it.".into(),
-        positional: vec![ArgSpec {
-            name: "board".into(),
-            r#type: ArgType::Board,
-            required: true,
-            help: "The board id.".into(),
-        }],
-        flags: vec![],
-        body_json: None,
-        response: serde_json::json!({ "ok": true, "board": "b_<id>", "deleted": true }),
-        auth: Role::Owner,
-        destructive: true,
-        dry_run: true,
-        examples: vec![Example {
-            args: "apps delete b_abcd1234".into(),
-            description: "Delete a board and its data.".into(),
-            response: serde_json::json!({ "ok": true, "board": "b_abcd1234", "deleted": true }),
-        }],
-        see_also: vec!["apps.show".into()],
-        danger_notes: Some("irreversible: deletes all records, recipes, keys and files on the board".into()),
-    });
-
-    specs.push(CommandSpec {
-        group: "apps".into(),
+        group: "tenant".into(),
         verb: "resources".into(),
-        summary: "Read an app's resource usage in real time.".into(),
-        description: "Returns current records, storage bytes, rate-limit usage, in-flight requests, CPU% and RAM for a board. The same report is streamed over WS with ?resources=1.".into(),
-        positional: vec![ArgSpec {
-            name: "board".into(),
-            r#type: ArgType::Board,
-            required: true,
-            help: "The board id.".into(),
-        }],
+        summary: "Read the app's resource usage.".into(),
+        description: "Returns current records, storage bytes and rate-limit usage for the tenant.".into(),
+        positional: vec![],
         flags: vec![],
         body_json: None,
-        response: serde_json::json!({ "ok": true, "board": "b_<id>", "records": { "count": 0 }, "storage": { "bytes": 0 }, "rate": { "limits": {} }, "system": { "cpu_percent": 0.0 } }),
+        response: serde_json::json!({ "ok": true, "tenant": "singleton", "records": { "count": 0 }, "storage": { "bytes": 0 }, "rate": { "limits": {} } }),
         auth: Role::Owner,
         destructive: false,
         dry_run: false,
         examples: vec![Example {
-            args: "apps resources b_abcd1234".into(),
-            description: "Read live resource usage for a board.".into(),
-            response: serde_json::json!({ "ok": true, "board": "b_abcd1234", "records": { "count": 42 } }),
+            args: "apps resources".into(),
+            description: "Read live resource usage.".into(),
+            response: serde_json::json!({ "ok": true, "tenant": "singleton", "records": { "count": 42 } }),
         }],
-        see_also: vec!["apps.show".into(), "apps.update".into()],
+        see_also: vec!["tenant.show".into(), "tenant.update".into()],
         danger_notes: None,
     });
 
     specs.push(CommandSpec {
-        group: "apps".into(),
+        group: "tenant".into(),
         verb: "update".into(),
-        summary: "Update an app's config.".into(),
-        description: "Sets schema, unique key, computed, validate, redact, TTL, rate or audit on a board. FLAGS: --schema <json> (JSON Schema Draft 2020-12, per-table or board-wide); --unique_key <path> (e.g. $.id — upsert conflict detection); --computed <json> (object of {field: expression} evaluated on every write, e.g. {\"updated_at\":\"$now\"} or {\"full_name\":\"concat($first_name, ' ', $last_name)\"}); --validate <json> (array of {\"when\":\"expr\",\"error\":\"msg\"} rules rejected on write); --redact <json> (array of JSON paths masked as *** on read); --ttl_seconds <n>; --rate <json>; --audit true|false. COMPUTED/VALIDATE EXPRESSIONS: plain JSON paths ($field), string literals, numbers, and simple functions. Board-level settings apply to all tables unless a table overrides. REST equivalent: PATCH /api/srv/<board>/app with the same fields, or per-table via tables.create.".into(),
-        positional: vec![ArgSpec {
-            name: "board".into(),
-            r#type: ArgType::Board,
-            required: true,
-            help: "The board id.".into(),
-        }],
+        summary: "Update the app's config.".into(),
+        description: "Sets tenant-level knobs: --title, --public_reads, --rate <json>, --audit true|false. Table-level schema/computed/validate/redact/TTL live on the per-table verbs.".into(),
+        positional: vec![],
         flags: vec![
             FlagSpec {
-                name: "schema".into(),
-                r#type: FlagType::Json,
+                name: "title".into(),
+                r#type: FlagType::Str,
                 default: None,
                 allowed: vec![],
                 repeatable: false,
-                help: "JSON Schema (Draft 2020-12).".into(),
-                conflicts: vec![],
-                requires: vec![],
-            },
-            FlagSpec {
-                name: "unique_key".into(),
-                r#type: FlagType::Path,
-                default: None,
-                allowed: vec![],
-                repeatable: false,
-                help: "JSON path used for upsert conflict detection.".into(),
-                conflicts: vec![],
-                requires: vec![],
-            },
-            FlagSpec {
-                name: "computed".into(),
-                r#type: FlagType::Json,
-                default: None,
-                allowed: vec![],
-                repeatable: false,
-                help: "Object of {field: expression} evaluated on every write.".into(),
-                conflicts: vec![],
-                requires: vec![],
-            },
-            FlagSpec {
-                name: "validate".into(),
-                r#type: FlagType::Json,
-                default: None,
-                allowed: vec![],
-                repeatable: false,
-                help: "Array of {when, error} validation rules.".into(),
-                conflicts: vec![],
-                requires: vec![],
-            },
-            FlagSpec {
-                name: "redact".into(),
-                r#type: FlagType::Json,
-                default: None,
-                allowed: vec![],
-                repeatable: false,
-                help: "Array of JSON paths to mask on read (→ ***).".into(),
-                conflicts: vec![],
-                requires: vec![],
-            },
-            FlagSpec {
-                name: "ttl_seconds".into(),
-                r#type: FlagType::Int,
-                default: None,
-                allowed: vec![],
-                repeatable: false,
-                help: "Auto-expire records after N seconds.".into(),
-                conflicts: vec![],
-                requires: vec![],
-            },
-            FlagSpec {
-                name: "audit".into(),
-                r#type: FlagType::Bool,
-                default: None,
-                allowed: vec![],
-                repeatable: false,
-                help: "Enable the immutable audit log.".into(),
+                help: "Human label for the app.".into(),
                 conflicts: vec![],
                 requires: vec![],
             },
@@ -323,26 +156,46 @@ pub fn registry() -> Vec<CommandSpec> {
                 conflicts: vec![],
                 requires: vec![],
             },
+            FlagSpec {
+                name: "rate".into(),
+                r#type: FlagType::Json,
+                default: None,
+                allowed: vec![],
+                repeatable: false,
+                help: "Rate-limit config {submit, upload, search, read, per_day}.".into(),
+                conflicts: vec![],
+                requires: vec![],
+            },
+            FlagSpec {
+                name: "audit".into(),
+                r#type: FlagType::Bool,
+                default: None,
+                allowed: vec![],
+                repeatable: false,
+                help: "Enable the immutable audit log.".into(),
+                conflicts: vec![],
+                requires: vec![],
+            },
         ],
         body_json: None,
-        response: serde_json::json!({ "ok": true, "board": "b_<id>", "updated": true }),
+        response: serde_json::json!({ "ok": true, "tenant": "singleton", "updated": true }),
         auth: Role::Owner,
         destructive: false,
         dry_run: false,
         examples: vec![Example {
-            args: "apps update b_abc --computed '{\"total\":\"$.qty * $.price\"}'".into(),
-            description: "Set computed fields.".into(),
-            response: serde_json::json!({ "ok": true, "board": "b_abc", "updated": true }),
+            args: "apps update --title 'my app' --public_reads true".into(),
+            description: "Set the app title and allow public reads.".into(),
+            response: serde_json::json!({ "ok": true, "tenant": "singleton", "updated": true }),
         }],
-        see_also: vec!["apps.show".into(), "apps.delete".into()],
+        see_also: vec!["tenant.show".into()],
         danger_notes: None,
     });
 
     specs.push(CommandSpec {
         group: "endpoints".into(),
         verb: "list".into(),
-        summary: "List the platform API endpoints a board's front-end calls.".into(),
-        description: "Returns the full REST/API surface served by the engine's server binary: the /api/srv/{board}/... endpoints (tables, records, auth, files, events, keys, jobs, recipes, secrets, assets), the non-API routes (SPA hosting /srv/{board}/, the AI proxy /srv/{board}/ai/*, /ws, /api/system/health, /healthz), and the AI proxy / SSO / realtime wiring. These routes are the same compiled code for every board — not per-app config — so this documents the contract a deployed app relies on.".into(),
+        summary: "List the platform API endpoints the app's front-end calls.".into(),
+        description: "Returns the full REST/API surface served by the worker: the /api/... endpoints (tables, records, auth, files, events, keys, jobs, recipes, secrets, assets), the non-API routes (SPA hosting /srv/, /api/system/health, /healthz, /mcp for JSON-RPC). These routes are compiled into the worker binary, so this documents the contract a deployed app relies on.".into(),
         positional: vec![],
         flags: vec![FlagSpec {
             name: "dir".into(),
@@ -355,7 +208,7 @@ pub fn registry() -> Vec<CommandSpec> {
             requires: vec![],
         }],
         body_json: None,
-        response: serde_json::json!({ "ok": true, "endpoints": [{ "method": "GET", "path": "/api/srv/{board}/tables", "desc": "List tables" }] }),
+        response: serde_json::json!({ "ok": true, "endpoints": [{ "method": "GET", "path": "/api/tables", "desc": "List tables" }] }),
         auth: Role::Reader,
         destructive: false,
         dry_run: false,
@@ -378,19 +231,14 @@ pub fn registry() -> Vec<CommandSpec> {
     specs.push(CommandSpec {
         group: "records".into(),
         verb: "submit".into(),
-        summary: "Insert a record into a board.".into(),
-        description: "Inserts a JSON document as a new record in the board's tenant; the record is stored as a HelixDB graph node under the table label, with numeric payload fields mirrored as node properties for aggregate pushdown. Returns its seq. The payload is a JSON object; `id` (string UUID) is the app's logical id and is used by graph.sync to resolve *_id refs. The engine assigns seq (int) automatically — do not pass one. Per-table schema (if set via tables.create/apps.update) validates the payload; computed_json fields are derived and merged into the stored payload; unique_key (e.g. $.id) rejects duplicates. REST equivalent: POST /api/srv/<board>/tables/<table>/bulk {\"records\":[{...}]} (?upsert=1 to overwrite on unique-key conflict, ?migrate=1 for fast bulk import that skips per-row validation/recipes).".into(),
-        positional: vec![ArgSpec {
-            name: "board".into(),
-            r#type: ArgType::Board,
-            required: true,
-            help: "The board id (also the HelixDB tenantId).".into(),
-        },
+        summary: "Insert a record into the app.".into(),
+        description: "Inserts a JSON document as a new record in the app's tables; the record is stored as a row (D1) or entry (memory) under the table label. Returns its seq. The payload is a JSON object; `id` (string UUID) is the app's logical id and is used to resolve cross-table *_id refs. The engine assigns seq (int) automatically — do not pass one. Per-table schema (if set via tables.create) validates the payload; computed_json fields are derived and merged into the stored payload; unique_key (e.g. $.id) rejects duplicates. REST equivalent: POST /api/tables/<table>/bulk {\"records\":[{...}]} (?upsert=1 to overwrite on unique-key conflict, ?migrate=1 for fast bulk import that skips per-row validation/recipes).".into(),
+        positional: vec![
             ArgSpec {
                 name: "table".into(),
                 r#type: ArgType::Name,
                 required: true,
-                help: "The table (node label) inside the board.".into(),
+                help: "The table (node label) inside the app.".into(),
             },
         ],
         flags: vec![],
@@ -403,7 +251,7 @@ pub fn registry() -> Vec<CommandSpec> {
         destructive: false,
         dry_run: false,
         examples: vec![Example {
-            args: "records submit b_abc learners '{\"name\":\"x\",\"grade\":90}'".into(),
+            args: "records submit learners '{\"name\":\"x\",\"grade\":90}'".into(),
             description: "Insert a record.".into(),
             response: serde_json::json!({ "ok": true, "seq": 42 }),
         }],
@@ -415,13 +263,8 @@ pub fn registry() -> Vec<CommandSpec> {
         group: "records".into(),
         verb: "bulk".into(),
         summary: "Bulk-insert or bulk-import many records at once.".into(),
-        description: "Inserts an array of record payloads in one call (body_json 'records'). Pass --upsert to overwrite on unique-key conflict, or --migrate for a fast bulk import that skips per-row validation/recipes/audit (run graph.sync afterwards to wire *_id refs). REST equivalent: POST /api/srv/<board>/tables/<table>/bulk {\"records\":[...]} (?upsert=1, ?migrate=1).".into(),
-        positional: vec![ArgSpec {
-            name: "board".into(),
-            r#type: ArgType::Board,
-            required: true,
-            help: "The board id.".into(),
-        },
+        description: "Inserts an array of record payloads in one call (body_json 'records'). Pass --upsert to overwrite on unique-key conflict, or --migrate for a fast bulk import that skips per-row validation/recipes/audit (run graph.sync afterwards to wire *_id refs). REST equivalent: POST /api/tables/<table>/bulk {\"records\":[...]} (?upsert=1, ?migrate=1).".into(),
+        positional: vec![
             ArgSpec {
                 name: "table".into(),
                 r#type: ArgType::Name,
@@ -460,7 +303,7 @@ pub fn registry() -> Vec<CommandSpec> {
         destructive: false,
         dry_run: false,
         examples: vec![Example {
-            args: "records bulk b_abc learners --records '[{\"name\":\"ada\"},{\"name\":\"zed\"}]'".into(),
+            args: "records bulk learners --records '[{\"name\":\"ada\"},{\"name\":\"zed\"}]'".into(),
             description: "Insert two records at once.".into(),
             response: serde_json::json!({ "ok": true, "seqs": [1, 2] }),
         }],
@@ -472,13 +315,8 @@ pub fn registry() -> Vec<CommandSpec> {
         group: "records".into(),
         verb: "query".into(),
         summary: "Filter records by conditions.".into(),
-        description: "Returns records matching a filter, sorted and paged. FILTER FORMAT (JSON): pass --filter as one of: (1) an equality map {\"class_id\":\"abc\"}; (2) an op map {\"price\":{\"gte\":500}}; (3) an array of condition objects [{\"field\":\"$.score\",\"op\":\"gte\",\"value\":50}, ...]; (4) {\"$and\":[cond, cond]}; (5) {\"search\":\"term\", ...extra ops} for full-text. OPERATORS: eq, ne, gt, gte, lt, lte, in (array), contains (string or array), search (full-text; use records.search for ranked results). Field paths are JSON paths into the payload, e.g. $.learner_id or learner_id (the leading $. is optional). OTHER FLAGS: --limit (1..=500, default 50), --order <path> (e.g. --order $.created_at --dir asc|desc; --dir desc is newest-first), --offset <n>, --allow_unfiltered. CONDITIONS on top-level payload fields push down to HelixDB mirrored properties; nested paths are filtered by the engine after a tenant-scoped fetch. RESPONSE: {\"ok\":true,\"records\":[{\"seq\":1,\"payload\":{...},\"created_at\":\"...\"}]}. REST equivalent: GET /api/srv/<board>/tables/<table>/query?filter=<urlencoded-json>&order=<path>&dir=<asc|desc>&limit=&offset=".into(),
-        positional: vec![ArgSpec {
-            name: "board".into(),
-            r#type: ArgType::Board,
-            required: true,
-            help: "The board id.".into(),
-        },
+        description: "Returns records matching a filter, sorted and paged. FILTER FORMAT (JSON): pass --filter as one of: (1) an equality map {\"class_id\":\"abc\"}; (2) an op map {\"price\":{\"gte\":500}}; (3) an array of condition objects [{\"field\":\"$.score\",\"op\":\"gte\",\"value\":50}, ...]; (4) {\"$and\":[cond, cond]}; (5) {\"search\":\"term\", ...extra ops} for full-text. OPERATORS: eq, ne, gt, gte, lt, lte, in (array), contains (string or array), search (full-text; use records.search for ranked results). Field paths are JSON paths into the payload, e.g. $.learner_id or learner_id (the leading $. is optional). OTHER FLAGS: --limit (1..=500, default 50), --order <path> (e.g. --order $.created_at --dir asc|desc; --dir desc is newest-first), --offset <n>, --allow_unfiltered. CONDITIONS are evaluated by the engine in Rust (D1 pushes down table scoping only). RESPONSE: {\"ok\":true,\"records\":[{\"seq\":1,\"payload\":{...},\"created_at\":\"...\"}]}. REST equivalent: GET /api/tables/<table>/query?filter=<urlencoded-json>&order=<path>&dir=<asc|desc>&limit=&offset=".into(),
+        positional: vec![
             ArgSpec {
                 name: "table".into(),
                 r#type: ArgType::Name,
@@ -524,7 +362,7 @@ pub fn registry() -> Vec<CommandSpec> {
         destructive: false,
         dry_run: false,
         examples: vec![Example {
-            args: "records query b_abc --filter '{\"price\":{\"gte\":500}}' --limit 10".into(),
+            args: "records query --filter '{\"price\":{\"gte\":500}}' --limit 10".into(),
             description: "Query records.".into(),
             response: serde_json::json!({ "ok": true, "records": [] }),
         }],
@@ -538,12 +376,6 @@ pub fn registry() -> Vec<CommandSpec> {
         summary: "Fetch a single record by seq.".into(),
         description: "Returns one record or an error if missing.".into(),
         positional: vec![
-            ArgSpec {
-                name: "board".into(),
-                r#type: ArgType::Board,
-                required: true,
-                help: "The board id.".into(),
-            },
             ArgSpec {
                 name: "table".into(),
                 r#type: ArgType::Name,
@@ -572,13 +404,8 @@ pub fn registry() -> Vec<CommandSpec> {
         group: "records".into(),
         verb: "list".into(),
         summary: "List records (newest-first; --dir asc for oldest-first).".into(),
-        description: "Returns records ordered by seq, paged. Default desc (newest-first); pass --dir asc for oldest-first. REST equivalent: GET /api/srv/<board>/tables/<table>/records?limit=&offset=&dir=asc|desc.".into(),
-        positional: vec![ArgSpec {
-            name: "board".into(),
-            r#type: ArgType::Board,
-            required: true,
-            help: "The board id.".into(),
-        },
+        description: "Returns records ordered by seq, paged. Default desc (newest-first); pass --dir asc for oldest-first. REST equivalent: GET /api/tables/<table>/records?limit=&offset=&dir=asc|desc.".into(),
+        positional: vec![
             ArgSpec {
                 name: "table".into(),
                 r#type: ArgType::Name,
@@ -624,7 +451,7 @@ pub fn registry() -> Vec<CommandSpec> {
         destructive: false,
         dry_run: false,
         examples: vec![Example {
-            args: "records list b_abc --limit 10".into(),
+            args: "records list --limit 10".into(),
             description: "List records.".into(),
             response: serde_json::json!({ "ok": true, "records": [] }),
         }],
@@ -638,12 +465,6 @@ pub fn registry() -> Vec<CommandSpec> {
         summary: "Full-text search over records.".into(),
         description: "Searches record payloads for a query string, ranked by hit count.".into(),
         positional: vec![
-            ArgSpec {
-                name: "board".into(),
-                r#type: ArgType::Board,
-                required: true,
-                help: "The board id.".into(),
-            },
             ArgSpec {
                 name: "table".into(),
                 r#type: ArgType::Name,
@@ -673,7 +494,7 @@ pub fn registry() -> Vec<CommandSpec> {
         destructive: false,
         dry_run: false,
         examples: vec![Example {
-            args: "records search b_abc 'alice'".into(),
+            args: "records search 'alice'".into(),
             description: "Search records.".into(),
             response: serde_json::json!({ "ok": true, "records": [] }),
         }],
@@ -685,14 +506,8 @@ pub fn registry() -> Vec<CommandSpec> {
         group: "records".into(),
         verb: "aggregate".into(),
         summary: "Aggregate records (count/sum/avg/min/max), optionally grouped.".into(),
-        description: "Runs an aggregate over a table's records: count/sum/avg/min/max on a payload field, optionally grouped by another field. The engine pushes the aggregate down to HelixDB when the target fields are mirrored node properties (top-level numeric payload fields); otherwise it computes in Rust over a tenant-scoped fetch. Use this instead of records.query when you only need summary math, not the rows themselves. USAGE: records aggregate <board> <table> count [--filter {...}] [--field price] [--group_by category]. --filter takes the same JSON as records.query (see records.query help for the filter format/operators). RESPONSE: {\"aggregate\":[{\"value\":343}]} or grouped: [{\"group\":\"A\",\"value\":120}]. REST equivalent: GET /api/srv/<board>/tables/<table>/aggregate?op=count[&field=price][&group_by=category][&filter=<json>].".into(),
+        description: "Runs an aggregate over a table's records: count/sum/avg/min/max on a payload field, optionally grouped by another field. The engine computes aggregates in Rust over a table-scoped fetch. Use this instead of records.query when you only need summary math, not the rows themselves. USAGE: records aggregate <table> count [--filter {...}] [--field price] [--group_by category]. --filter takes the same JSON as records.query (see records.query help for the filter format/operators). RESPONSE: {\"aggregate\":[{\"value\":343}]} or grouped: [{\"group\":\"A\",\"value\":120}]. REST equivalent: GET /api/tables/<table>/aggregate?op=count[&field=price][&group_by=category][&filter=<json>].".into(),
         positional: vec![
-            ArgSpec {
-                name: "board".into(),
-                r#type: ArgType::Board,
-                required: true,
-                help: "The board id.".into(),
-            },
             ArgSpec {
                 name: "table".into(),
                 r#type: ArgType::Name,
@@ -744,7 +559,7 @@ pub fn registry() -> Vec<CommandSpec> {
         destructive: false,
         dry_run: false,
         examples: vec![Example {
-            args: "records aggregate b_abc orders sum --field price --group_by category --filter '{\"status\":\"paid\"}'".into(),
+            args: "records aggregate orders sum --field price --group_by category --filter '{\"status\":\"paid\"}'".into(),
             description: "Sum order prices grouped by category, paid only.".into(),
             response: serde_json::json!({ "ok": true, "agg": "sum", "results": [{ "group": "books", "value": 99 }] }),
         }],
@@ -758,12 +573,6 @@ pub fn registry() -> Vec<CommandSpec> {
         summary: "Delete a single record by seq.".into(),
         description: "Removes one record; returns whether it existed.".into(),
         positional: vec![
-            ArgSpec {
-                name: "board".into(),
-                r#type: ArgType::Board,
-                required: true,
-                help: "The board id.".into(),
-            },
             ArgSpec {
                 name: "table".into(),
                 r#type: ArgType::Name,
@@ -784,7 +593,7 @@ pub fn registry() -> Vec<CommandSpec> {
         destructive: true,
         dry_run: true,
         examples: vec![Example {
-            args: "records delete b_abc 1".into(),
+            args: "records delete 1".into(),
             description: "Delete a record.".into(),
             response: serde_json::json!({ "ok": true, "seq": 1, "deleted": true }),
         }],
@@ -794,15 +603,100 @@ pub fn registry() -> Vec<CommandSpec> {
 
     specs.push(CommandSpec {
         group: "records".into(),
+        verb: "update".into(),
+        summary: "Replace a record's payload by seq.".into(),
+        description: "Replaces the payload (re-validated, uniqueness re-checked), preserving identity and created_at. Returns an error when the seq does not exist.".into(),
+        positional: vec![
+            ArgSpec {
+                name: "table".into(),
+                r#type: ArgType::Name,
+                required: true,
+                help: "The table name.".into(),
+            },
+            ArgSpec {
+                name: "seq".into(),
+                r#type: ArgType::Seq,
+                required: true,
+                help: "The record sequence number.".into(),
+            },
+        ],
+        flags: vec![
+            FlagSpec {
+                name: "payload".into(),
+                r#type: FlagType::Json,
+                default: None,
+                allowed: vec![],
+                repeatable: false,
+                help: "The replacement payload object.".into(),
+                conflicts: vec![],
+                requires: vec![],
+            },
+        ],
+        body_json: None,
+        response: serde_json::json!({ "ok": true, "seq": 1, "updated": true }),
+        auth: Role::Writer,
+        destructive: true,
+        dry_run: true,
+        examples: vec![Example {
+            args: "records update notes 1 --payload '{\"body\":\"edited\"}'".into(),
+            description: "Replace a record.".into(),
+            response: serde_json::json!({ "ok": true, "seq": 1, "updated": true }),
+        }],
+        see_also: vec!["records.patch".into(), "records.get".into()],
+        danger_notes: Some("replaces the stored payload".into()),
+    });
+
+    specs.push(CommandSpec {
+        group: "records".into(),
+        verb: "patch".into(),
+        summary: "Patch a record by seq ($set/$unset/$inc/$dec/$mul or merge).".into(),
+        description: "Applies a Mongo-style patch ops object to the payload (re-validated afterwards) and returns the merged payload.".into(),
+        positional: vec![
+            ArgSpec {
+                name: "table".into(),
+                r#type: ArgType::Name,
+                required: true,
+                help: "The table name.".into(),
+            },
+            ArgSpec {
+                name: "seq".into(),
+                r#type: ArgType::Seq,
+                required: true,
+                help: "The record sequence number.".into(),
+            },
+        ],
+        flags: vec![
+            FlagSpec {
+                name: "patch".into(),
+                r#type: FlagType::Json,
+                default: None,
+                allowed: vec![],
+                repeatable: false,
+                help: "The patch ops object.".into(),
+                conflicts: vec![],
+                requires: vec![],
+            },
+        ],
+        body_json: None,
+        response: serde_json::json!({ "ok": true, "seq": 1, "payload": {} }),
+        auth: Role::Writer,
+        destructive: false,
+        dry_run: true,
+        examples: vec![Example {
+            args: "records patch notes 1 --patch '{\"$set\":{\"body\":\"edited\"}}'".into(),
+            description: "Patch a record.".into(),
+            response: serde_json::json!({ "ok": true, "seq": 1, "payload": {} }),
+        }],
+        see_also: vec!["records.update".into(), "records.get".into()],
+        danger_notes: None,
+    });
+
+    specs.push(CommandSpec {
+        group: "records".into(),
         verb: "import".into(),
         summary: "Bulk-import records from a JSON or CSV dump.".into(),
-        description: "Parses a JSON array/JSONL or CSV (header row) dump and inserts each row as a record, validating against the board schema. Invalid rows are skipped and reported; valid rows are inserted.".into(),
-        positional: vec![ArgSpec {
-            name: "board".into(),
-            r#type: ArgType::Board,
-            required: true,
-            help: "The board id.".into(),
-        },
+        description: "Parses a JSON array/JSONL or CSV (header row) dump and inserts each row as a record, validating against the app schema. Invalid rows are skipped and reported; valid rows are inserted.".into(),
+        positional: vec![
             ArgSpec {
                 name: "table".into(),
                 r#type: ArgType::Name,
@@ -859,12 +753,12 @@ pub fn registry() -> Vec<CommandSpec> {
         dry_run: false,
         examples: vec![
             Example {
-                args: "records import b_abc --format json --data '[{\"name\":\"ada\"},{\"name\":\"zed\"}]'".into(),
+                args: "records import --format json --data '[{\"name\":\"ada\"},{\"name\":\"zed\"}]'".into(),
                 description: "Import a JSON array.".into(),
                 response: serde_json::json!({ "ok": true, "total": 2, "inserted": 2, "seqs": [1, 2], "errors": [] }),
             },
             Example {
-                args: "records import b_abc --format csv --data 'name,score\\nada,85\\nzed,90'".into(),
+                args: "records import --format csv --data 'name,score\\nada,85\\nzed,90'".into(),
                 description: "Import CSV with a header row.".into(),
                 response: serde_json::json!({ "ok": true, "total": 2, "inserted": 2, "seqs": [1, 2], "errors": [] }),
             },
@@ -876,10 +770,9 @@ pub fn registry() -> Vec<CommandSpec> {
     specs.push(CommandSpec {
         group: "tables".into(),
         verb: "create".into(),
-        summary: "Create a table (collection) inside a board.".into(),
-        description: "Creates a named table with an optional JSON Schema and unique key. Records live in tables; a board is a tenant that owns many tables.".into(),
+        summary: "Create a table (collection) inside the app.".into(),
+        description: "Creates a named table with an optional JSON Schema and unique key. Records live in tables; the app is a tenant that owns many tables.".into(),
         positional: vec![
-            ArgSpec { name: "board".into(), r#type: ArgType::Board, required: true, help: "The board id.".into() },
             ArgSpec { name: "table".into(), r#type: ArgType::Name, required: true, help: "The table name.".into() },
         ],
         flags: vec![
@@ -892,7 +785,7 @@ pub fn registry() -> Vec<CommandSpec> {
         destructive: false,
         dry_run: false,
         examples: vec![Example {
-            args: "tables create b_abc learners --schema '{\"type\":\"object\"}'".into(),
+            args: "tables create learners --schema '{\"type\":\"object\"}'".into(),
             description: "Create a table with a schema.".into(),
             response: serde_json::json!({ "ok": true, "table": { "table": "learners" } }),
         }],
@@ -903,9 +796,9 @@ pub fn registry() -> Vec<CommandSpec> {
     specs.push(CommandSpec {
         group: "tables".into(),
         verb: "list".into(),
-        summary: "List the tables of a board.".into(),
-        description: "Returns every table (collection) defined on the board.".into(),
-        positional: vec![ArgSpec { name: "board".into(), r#type: ArgType::Board, required: true, help: "The board id.".into() }],
+        summary: "List the tables of the app.".into(),
+        description: "Returns every table (collection) defined on the app.".into(),
+        positional: vec![],
         flags: vec![],
         body_json: None,
         response: serde_json::json!({ "ok": true, "tables": [] }),
@@ -913,7 +806,7 @@ pub fn registry() -> Vec<CommandSpec> {
         destructive: false,
         dry_run: false,
         examples: vec![Example {
-            args: "tables list b_abc".into(),
+            args: "tables list".into(),
             description: "List tables.".into(),
             response: serde_json::json!({ "ok": true, "tables": [] }),
         }],
@@ -925,9 +818,8 @@ pub fn registry() -> Vec<CommandSpec> {
         group: "tables".into(),
         verb: "show".into(),
         summary: "Show one table's full config.".into(),
-        description: "Returns a single table's config (schema, unique_key, computed, validate, redact, ttl). REST equivalent: GET /api/srv/<board>/tables/<table>.".into(),
+        description: "Returns a single table's config (schema, unique_key, computed, validate, redact, ttl). REST equivalent: GET /api/tables/<table>.".into(),
         positional: vec![
-            ArgSpec { name: "board".into(), r#type: ArgType::Board, required: true, help: "The board id.".into() },
             ArgSpec { name: "table".into(), r#type: ArgType::Name, required: true, help: "The table name.".into() },
         ],
         flags: vec![],
@@ -947,7 +839,6 @@ pub fn registry() -> Vec<CommandSpec> {
         summary: "Drop a table and all its records.".into(),
         description: "Permanently removes the table config and every record in it.".into(),
         positional: vec![
-            ArgSpec { name: "board".into(), r#type: ArgType::Board, required: true, help: "The board id.".into() },
             ArgSpec { name: "table".into(), r#type: ArgType::Name, required: true, help: "The table name.".into() },
         ],
         flags: vec![],
@@ -957,7 +848,7 @@ pub fn registry() -> Vec<CommandSpec> {
         destructive: true,
         dry_run: true,
         examples: vec![Example {
-            args: "tables delete b_abc learners".into(),
+            args: "tables delete learners".into(),
             description: "Drop a table.".into(),
             response: serde_json::json!({ "ok": true, "deleted": true }),
         }],
@@ -966,12 +857,42 @@ pub fn registry() -> Vec<CommandSpec> {
     });
 
     specs.push(CommandSpec {
+        group: "tables".into(),
+        verb: "config".into(),
+        summary: "Read or change a table's behavior knobs.".into(),
+        description: "Per-table schema-adjacent config. --show reads {schema, unique_key, computed, validate, redact, ttl_seconds, ttl_field}. Any set-flag writes it (an explicit null clears computed/validate/redact); --ttl_seconds/--ttl_field set the TTL; --clear-ttl clears it.".into(),
+        positional: vec![
+            ArgSpec { name: "table".into(), r#type: ArgType::Name, required: true, help: "The table name.".into() },
+        ],
+        flags: vec![
+            FlagSpec { name: "show".into(), r#type: FlagType::Bool, default: None, allowed: vec![], repeatable: false, help: "Read the knobs instead of writing.".into(), conflicts: vec![], requires: vec![] },
+            FlagSpec { name: "computed".into(), r#type: FlagType::Json, default: None, allowed: vec![], repeatable: false, help: "Object of {field: expression} evaluated on every write (null clears).".into(), conflicts: vec![], requires: vec![] },
+            FlagSpec { name: "validate".into(), r#type: FlagType::Json, default: None, allowed: vec![], repeatable: false, help: "Array of {when, error} rules (null clears).".into(), conflicts: vec![], requires: vec![] },
+            FlagSpec { name: "redact".into(), r#type: FlagType::Json, default: None, allowed: vec![], repeatable: false, help: "Array of JSON paths masked on read (null clears).".into(), conflicts: vec![], requires: vec![] },
+            FlagSpec { name: "ttl_seconds".into(), r#type: FlagType::Int, default: None, allowed: vec![], repeatable: false, help: "Auto-expire records after N seconds.".into(), conflicts: vec![], requires: vec![] },
+            FlagSpec { name: "ttl_field".into(), r#type: FlagType::Str, default: None, allowed: vec![], repeatable: false, help: "Payload path holding an expiry timestamp.".into(), conflicts: vec![], requires: vec![] },
+            FlagSpec { name: "clear_ttl".into(), r#type: FlagType::Bool, default: None, allowed: vec![], repeatable: false, help: "Clear the whole TTL.".into(), conflicts: vec![], requires: vec![] },
+        ],
+        body_json: None,
+        response: serde_json::json!({ "ok": true, "table": "learners", "updated": true }),
+        auth: Role::Admin,
+        destructive: false,
+        dry_run: false,
+        examples: vec![Example {
+            args: "tables config learners --show".into(),
+            description: "Read a table's knobs.".into(),
+            response: serde_json::json!({ "ok": true, "table": "learners" }),
+        }],
+        see_also: vec!["tables.show".into(), "tables.create".into()],
+        danger_notes: None,
+    });
+
+    specs.push(CommandSpec {
         group: "secrets".into(),
         verb: "set".into(),
-        summary: "Store an encrypted secret for a board.".into(),
+        summary: "Store an encrypted secret for the app.".into(),
         description: "Saves a named secret (AES-256-GCM encrypted at rest). Never returned as plaintext; use {secret:name} in recipe $call actions.".into(),
         positional: vec![
-            ArgSpec { name: "board".into(), r#type: ArgType::Board, required: true, help: "The board id.".into() },
             ArgSpec { name: "name".into(), r#type: ArgType::Name, required: true, help: "Secret name (stored uppercased).".into() },
             ArgSpec { name: "value".into(), r#type: ArgType::Str, required: true, help: "The secret value.".into() },
         ],
@@ -982,7 +903,7 @@ pub fn registry() -> Vec<CommandSpec> {
         destructive: false,
         dry_run: false,
         examples: vec![Example {
-            args: "secrets set b_abc AFRICASTALKING_API_KEY sk_live_xxx".into(),
+            args: "secrets set AFRICASTALKING_API_KEY sk_live_xxx".into(),
             description: "Store a secret.".into(),
             response: serde_json::json!({ "ok": true, "set": "AFRICASTALKING_API_KEY" }),
         }],
@@ -993,9 +914,9 @@ pub fn registry() -> Vec<CommandSpec> {
     specs.push(CommandSpec {
         group: "secrets".into(),
         verb: "list".into(),
-        summary: "List a board's secret names and fingerprints.".into(),
+        summary: "List the app's secret names and fingerprints.".into(),
         description: "Returns secret names and fingerprints only — never plaintext values.".into(),
-        positional: vec![ArgSpec { name: "board".into(), r#type: ArgType::Board, required: true, help: "The board id.".into() }],
+        positional: vec![],
         flags: vec![],
         body_json: None,
         response: serde_json::json!({ "ok": true, "secrets": [{ "name": "API_KEY", "fingerprint": "abc123" }] }),
@@ -1003,7 +924,7 @@ pub fn registry() -> Vec<CommandSpec> {
         destructive: false,
         dry_run: false,
         examples: vec![Example {
-            args: "secrets list b_abc".into(),
+            args: "secrets list".into(),
             description: "List secret names.".into(),
             response: serde_json::json!({ "ok": true, "secrets": [] }),
         }],
@@ -1017,7 +938,6 @@ pub fn registry() -> Vec<CommandSpec> {
         summary: "Show one secret, including its decrypted value (MCP-only).".into(),
         description: "Returns a single secret's name, fingerprint and decrypted value. The plaintext is returned ONLY through this MCP tool (for export/app-folder portability); the REST API and secrets.list never reveal it.".into(),
         positional: vec![
-            ArgSpec { name: "board".into(), r#type: ArgType::Board, required: true, help: "The board id.".into() },
             ArgSpec { name: "name".into(), r#type: ArgType::Name, required: true, help: "Secret name (case-insensitive; stored uppercased).".into() },
         ],
         flags: vec![],
@@ -1027,7 +947,7 @@ pub fn registry() -> Vec<CommandSpec> {
         destructive: false,
         dry_run: false,
         examples: vec![Example {
-            args: "secrets show b_abc API_KEY".into(),
+            args: "secrets show API_KEY".into(),
             description: "Show the API_KEY secret's value (MCP-only).".into(),
             response: serde_json::json!({ "ok": true, "name": "API_KEY", "fingerprint": "abc123", "value": "sk_live_xxx" }),
         }],
@@ -1038,10 +958,9 @@ pub fn registry() -> Vec<CommandSpec> {
     specs.push(CommandSpec {
         group: "secrets".into(),
         verb: "delete".into(),
-        summary: "Delete a board secret.".into(),
+        summary: "Delete the app secret.".into(),
         description: "Removes a named secret so {secret:name} placeholders no longer resolve.".into(),
         positional: vec![
-            ArgSpec { name: "board".into(), r#type: ArgType::Board, required: true, help: "The board id.".into() },
             ArgSpec { name: "name".into(), r#type: ArgType::Name, required: true, help: "Secret name.".into() },
         ],
         flags: vec![],
@@ -1051,7 +970,7 @@ pub fn registry() -> Vec<CommandSpec> {
         destructive: true,
         dry_run: true,
         examples: vec![Example {
-            args: "secrets delete b_abc API_KEY".into(),
+            args: "secrets delete API_KEY".into(),
             description: "Delete a secret.".into(),
             response: serde_json::json!({ "ok": true, "deleted": true }),
         }],
@@ -1062,30 +981,29 @@ pub fn registry() -> Vec<CommandSpec> {
     specs.push(CommandSpec {
         group: "auth".into(),
         verb: "signup".into(),
-        summary: "Create a user (plaintext password or imported bcrypt hash).".into(),
-        description: "Two modes, chosen per-call: pass `password` (engine bcrypt-hashes it, >= 6 chars) or `password_hash` (an existing bcrypt hash, e.g. from Supabase, stored verbatim — requires an admin/owner caller). Exactly one of the two must be provided.".into(),
+        summary: "Create a user (plaintext password or imported v1 hash).".into(),
+        description: "Two modes, chosen per-call: pass `password` (engine salted-hashes it, >= 6 chars) or `password_hash` (an existing v1$ sha256 hash, stored verbatim — requires an admin/owner caller). Exactly one of the two must be provided.".into(),
         positional: vec![
-            ArgSpec { name: "board".into(), r#type: ArgType::Board, required: true, help: "The board id.".into() },
             ArgSpec { name: "email".into(), r#type: ArgType::Str, required: true, help: "The user's email (lowercased).".into() },
             ArgSpec { name: "password".into(), r#type: ArgType::Str, required: false, help: "Plaintext password (mode B: engine hashes it).".into() },
         ],
         flags: vec![
-            FlagSpec { name: "password_hash".into(), r#type: FlagType::Str, default: None, allowed: vec![], repeatable: false, help: "Existing bcrypt hash to import verbatim (mode A; admin/owner only).".into(), conflicts: vec![], requires: vec![] },
+            FlagSpec { name: "password_hash".into(), r#type: FlagType::Str, default: None, allowed: vec![], repeatable: false, help: "Existing v1$ hash to import verbatim (mode A; admin/owner only).".into(), conflicts: vec![], requires: vec![] },
             FlagSpec { name: "role".into(), r#type: FlagType::Str, default: None, allowed: vec![], repeatable: false, help: "Requested role (clamped to reader for non-admin callers; default reader).".into(), conflicts: vec![], requires: vec![] },
         ],
         body_json: None,
-        response: serde_json::json!({ "ok": true, "user": { "email": "a@x.ug", "board_id": "b_abc", "role": "teacher", "created_at": "..." } }),
+        response: serde_json::json!({ "ok": true, "user": { "email": "a@x.ug", "role": "teacher", "created_at": "..." } }),
         auth: Role::Public,
         destructive: false,
         dry_run: false,
         examples: vec![
             Example {
-                args: "auth signup b_abc a@x.ug plaintext123 --role teacher".into(),
+                args: "auth signup a@x.ug plaintext123 --role teacher".into(),
                 description: "Create a user with a plaintext password.".into(),
                 response: serde_json::json!({ "ok": true, "user": { "email": "a@x.ug" } }),
             },
             Example {
-                args: "auth signup b_abc ali@sised.sc.ug --password_hash '$2a$10$VjZAU2...' --role teacher".into(),
+                args: "auth signup ali@sised.sc.ug --password_hash 'v1$salt$hex...' --role teacher".into(),
                 description: "Import a user with an existing Supabase hash.".into(),
                 response: serde_json::json!({ "ok": true, "user": { "email": "ali@sised.sc.ug" } }),
             },
@@ -1100,7 +1018,6 @@ pub fn registry() -> Vec<CommandSpec> {
         summary: "Authenticate and get a session token + JWT.".into(),
         description: "Verifies the password and returns a revocable opaque token plus a signed JWT (HS256).".into(),
         positional: vec![
-            ArgSpec { name: "board".into(), r#type: ArgType::Board, required: true, help: "The board id.".into() },
             ArgSpec { name: "email".into(), r#type: ArgType::Str, required: true, help: "The user's email.".into() },
             ArgSpec { name: "password".into(), r#type: ArgType::Str, required: true, help: "The password.".into() },
         ],
@@ -1111,7 +1028,7 @@ pub fn registry() -> Vec<CommandSpec> {
         destructive: false,
         dry_run: false,
         examples: vec![Example {
-            args: "auth login b_abc a@x.ug secret123".into(),
+            args: "auth login a@x.ug secret123".into(),
             description: "Log in and receive a session token + JWT.".into(),
             response: serde_json::json!({ "ok": true, "token": "...", "jwt": "..." }),
         }],
@@ -1123,14 +1040,13 @@ pub fn registry() -> Vec<CommandSpec> {
         group: "auth".into(),
         verb: "me".into(),
         summary: "Resolve a session token to the logged-in user.".into(),
-        description: "Returns the user (email, role, board) for a valid session token, or an error if invalid or expired.".into(),
+        description: "Returns the user (email, role) for a valid session token, or an error if invalid or expired.".into(),
         positional: vec![
-            ArgSpec { name: "board".into(), r#type: ArgType::Board, required: true, help: "The board id.".into() },
             ArgSpec { name: "token".into(), r#type: ArgType::Str, required: true, help: "Session token from auth login.".into() },
         ],
         flags: vec![],
         body_json: None,
-        response: serde_json::json!({ "ok": true, "user": { "email": "a@x.ug", "board_id": "b_abc", "role": "teacher", "created_at": "..." } }),
+        response: serde_json::json!({ "ok": true, "user": { "email": "a@x.ug", "role": "teacher", "created_at": "..." } }),
         auth: Role::Reader,
         destructive: false,
         dry_run: false,
@@ -1141,11 +1057,29 @@ pub fn registry() -> Vec<CommandSpec> {
 
     specs.push(CommandSpec {
         group: "auth".into(),
+        verb: "logout".into(),
+        summary: "Revoke a session token.".into(),
+        description: "Logs out the session so its token stops resolving. REST equivalent: POST /api/auth/logout.".into(),
+        positional: vec![
+            ArgSpec { name: "token".into(), r#type: ArgType::Str, required: true, help: "Session token from auth login.".into() },
+        ],
+        flags: vec![],
+        body_json: None,
+        response: serde_json::json!({ "ok": true, "logged_out": true }),
+        auth: Role::Public,
+        destructive: false,
+        dry_run: false,
+        examples: vec![],
+        see_also: vec!["auth.login".into(), "auth.me".into()],
+        danger_notes: None,
+    });
+
+    specs.push(CommandSpec {
+        group: "auth".into(),
         verb: "set_role".into(),
         summary: "Change a user's role (admin/owner only).".into(),
         description: "Sets the user's role to the given value and expires their sessions so stale tokens drop the old role. The engine equivalent of Supabase's `assign_user_role` / the app's /api/auth/update-role.".into(),
         positional: vec![
-            ArgSpec { name: "board".into(), r#type: ArgType::Board, required: true, help: "The board id.".into() },
             ArgSpec { name: "email".into(), r#type: ArgType::Str, required: true, help: "The user's email.".into() },
             ArgSpec { name: "role".into(), r#type: ArgType::Str, required: true, help: "The new role (e.g. admin, teacher, accountant).".into() },
         ],
@@ -1156,7 +1090,7 @@ pub fn registry() -> Vec<CommandSpec> {
         destructive: false,
         dry_run: false,
         examples: vec![Example {
-            args: "auth set_role b_abc teacher@alheib.test accountant".into(),
+            args: "auth set_role teacher@alheib.test accountant".into(),
             description: "Promote a teacher to accountant.".into(),
             response: serde_json::json!({ "ok": true, "user": { "email": "teacher@alheib.test", "role": "accountant" } }),
         }],
@@ -1167,18 +1101,18 @@ pub fn registry() -> Vec<CommandSpec> {
     specs.push(CommandSpec {
         group: "users".into(),
         verb: "list".into(),
-        summary: "List a board's users (email, role, created_at).".into(),
-        description: "Returns every user of the board with their role and creation time — never password hashes. The engine equivalent of a sqlite `select` over the auth users table.".into(),
-        positional: vec![ArgSpec { name: "board".into(), r#type: ArgType::Board, required: true, help: "The board id.".into() }],
+        summary: "List the app's users (email, role, created_at).".into(),
+        description: "Returns every user of the app with their role and creation time — never password hashes. The engine equivalent of a sqlite `select` over the auth users table.".into(),
+        positional: vec![],
         flags: vec![],
         body_json: None,
-        response: serde_json::json!({ "ok": true, "users": [{ "email": "a@x.ug", "role": "teacher", "board_id": "b_abc", "created_at": "..." }] }),
+        response: serde_json::json!({ "ok": true, "users": [{ "email": "a@x.ug", "role": "teacher", "created_at": "..." }] }),
         auth: Role::Reader,
         destructive: false,
         dry_run: false,
         examples: vec![Example {
-            args: "users list b_abc".into(),
-            description: "List all users on the board.".into(),
+            args: "users list".into(),
+            description: "List all users on the app.".into(),
             response: serde_json::json!({ "ok": true, "users": [] }),
         }],
         see_also: vec!["auth.signup".into(), "auth.me".into()],
@@ -1188,9 +1122,9 @@ pub fn registry() -> Vec<CommandSpec> {
     specs.push(CommandSpec {
         group: "keys".into(),
         verb: "list".into(),
-        summary: "List a board's API keys.".into(),
+        summary: "List the app's API keys.".into(),
         description: "Returns each API key's name, role, scope and revoked state — never the secret or its hash fingerprint.".into(),
-        positional: vec![ArgSpec { name: "board".into(), r#type: ArgType::Board, required: true, help: "The board id.".into() }],
+        positional: vec![],
         flags: vec![],
         body_json: None,
         response: serde_json::json!({ "ok": true, "keys": [{ "name": "waos", "role": "admin", "scope": null, "revoked": false }] }),
@@ -1198,8 +1132,8 @@ pub fn registry() -> Vec<CommandSpec> {
         destructive: false,
         dry_run: false,
         examples: vec![Example {
-            args: "keys list b_abc".into(),
-            description: "List API keys on the board.".into(),
+            args: "keys list".into(),
+            description: "List API keys on the app.".into(),
             response: serde_json::json!({ "ok": true, "keys": [] }),
         }],
         see_also: vec![],
@@ -1210,36 +1144,56 @@ pub fn registry() -> Vec<CommandSpec> {
         group: "keys".into(),
         verb: "show".into(),
         summary: "Show one API key's full metadata.".into(),
-        description: "Returns a single key's record (bucket, role, scope, writer, revoked_at, key_hash, salt). Never the plaintext secret — the engine only stores a salted hash.".into(),
+        description: "Returns a single key's record (bucket, role, scope, writer, revoked_at). Never the plaintext secret, hash, or salt.".into(),
         positional: vec![
             ArgSpec { name: "bucket".into(), r#type: ArgType::Name, required: true, help: "The key bucket (its name/identifier).".into() },
         ],
         flags: vec![],
         body_json: None,
-        response: serde_json::json!({ "ok": true, "bucket": "waos", "board_id": "b_abc", "role": "admin", "scope": null, "writer": null, "revoked": false, "revoked_at": null, "key_hash": "...", "salt": "..." }),
+        response: serde_json::json!({ "ok": true, "bucket": "waos", "role": "admin", "scope": null, "writer": null, "revoked": false, "revoked_at": null }),
         auth: Role::Admin,
         destructive: false,
         dry_run: false,
         examples: vec![Example {
             args: "keys show waos".into(),
             description: "Show the key record for bucket 'waos'.".into(),
-            response: serde_json::json!({ "ok": true, "bucket": "waos", "board_id": "b_abc", "role": "admin" }),
+            response: serde_json::json!({ "ok": true, "bucket": "waos", "role": "admin" }),
         }],
         see_also: vec!["keys.list".into()],
-        danger_notes: Some("reveals the salted key hash — the raw secret is never stored".into()),
+        danger_notes: None,
+    });
+
+    specs.push(CommandSpec {
+        group: "keys".into(),
+        verb: "issue".into(),
+        summary: "Issue a new API key.".into(),
+        description: "Creates a key with a role (default writer) plus optional writer tag and customer scope. Returns the plaintext secret ONCE — only its salted hash is stored.".into(),
+        positional: vec![],
+        flags: vec![
+            FlagSpec { name: "role".into(), r#type: FlagType::Str, default: Some("writer".into()), allowed: vec![], repeatable: false, help: "reader | writer | admin | customer.".into(), conflicts: vec![], requires: vec![] },
+            FlagSpec { name: "writer".into(), r#type: FlagType::Str, default: None, allowed: vec![], repeatable: false, help: "Writer tag recorded on writes.".into(), conflicts: vec![], requires: vec![] },
+            FlagSpec { name: "scope".into(), r#type: FlagType::Str, default: None, allowed: vec![], repeatable: false, help: "Customer scope (customer role only).".into(), conflicts: vec![], requires: vec![] },
+        ],
+        body_json: None,
+        response: serde_json::json!({ "ok": true, "bucket": "waos", "key": "<secret>", "role": "writer" }),
+        auth: Role::Admin,
+        destructive: false,
+        dry_run: false,
+        examples: vec![Example {
+            args: "keys issue --role reader".into(),
+            description: "Issue a reader key.".into(),
+            response: serde_json::json!({ "ok": true, "bucket": "waos", "key": "<secret>", "role": "reader" }),
+        }],
+        see_also: vec!["keys.list".into(), "keys.show".into()],
+        danger_notes: Some("the plaintext secret is shown once — store it now".into()),
     });
 
     specs.push(CommandSpec {
         group: "recipes".into(),
         verb: "list".into(),
-        summary: "List automation recipes for a board.".into(),
-        description: "Returns the recipes defined on a board.".into(),
-        positional: vec![ArgSpec {
-            name: "board".into(),
-            r#type: ArgType::Board,
-            required: true,
-            help: "The board id.".into(),
-        }],
+        summary: "List automation recipes for the app.".into(),
+        description: "Returns the recipes defined on the app.".into(),
+        positional: vec![],
         flags: vec![],
         body_json: None,
         response: serde_json::json!({ "ok": true, "recipes": [] }),
@@ -1257,7 +1211,6 @@ pub fn registry() -> Vec<CommandSpec> {
         summary: "Show one automation recipe's full definition.".into(),
         description: "Returns a single recipe with its trigger (when), payload filter (match), actions, dedup key and optional trigger-table — the full wiring of an automation.".into(),
         positional: vec![
-            ArgSpec { name: "board".into(), r#type: ArgType::Board, required: true, help: "The board id.".into() },
             ArgSpec { name: "name".into(), r#type: ArgType::Name, required: true, help: "Recipe name.".into() },
         ],
         flags: vec![],
@@ -1267,7 +1220,7 @@ pub fn registry() -> Vec<CommandSpec> {
         destructive: false,
         dry_run: false,
         examples: vec![Example {
-            args: "recipes show b_abc welcome".into(),
+            args: "recipes show welcome".into(),
             description: "Show the 'welcome' recipe's full definition.".into(),
             response: serde_json::json!({ "ok": true, "name": "welcome", "enabled": true, "when": "record.created" }),
         }],
@@ -1278,15 +1231,9 @@ pub fn registry() -> Vec<CommandSpec> {
     specs.push(CommandSpec {
         group: "recipes".into(),
         verb: "add".into(),
-        summary: "Add an automation recipe to a board.".into(),
-        description: "Registers a recipe that runs actions when its trigger event fires. TRIGGER EVENTS: \"record.created\", \"record.updated\", \"record.deleted\", \"record.inbound\" (webhook/events), \"record.cron\". --when accepts the event string or {\"event\":\"record.created\",\"table\":\"<name>\",\"when\":\"<expr>\"} to narrow to a table/condition; --match <json> is a filter on the triggering payload (same shape as records.query --filter). ACTIONS (array of objects, applied in order, all optional): {\"$compute\":{\"$.field\":\"<expr>\"}} (set derived field); {\"$set\":{\"$.field\":\"<value>\"}}; {\"$copy\":{\"$.dst\":\"$.src\"}} / {\"$move\":...}; {\"$upsert_other\":{\"table\":\"<t>\",\"record\":{...},\"unique_key\":\"$.id\"}} (write to another table); {\"$patch_other\":{\"table\":\"<t>\",\"seq\":N,\"patch\":{...}}}; {\"$resolve_other\":{\"table\":\"<t>\",\"filter\":{...},\"field\":\"id\",\"into\":\"$.x\"}} (look up one row in another table and copy a field into the payload — for name->id mapping); {\"$create_user\":{\"email\":\"{{$.email}}\",\"password\":\"...\",\"role\":\"student\",\"into\":\"$.user_id\"}} (create an engine auth user from the payload and store its email — ports auto_create_student_account); {\"$call\":{\"url\":\"...\",\"method\":\"POST\",\"body\":{...},\"headers\":{...},\"secret\":\"<name>\"}} (HTTP action; {\"secret\":\"$name\"} resolves board secrets); {\"$log\":\"msg\"}; {\"$set_state\":{\"$.stage\":\"approved\"}}; {\"$schedule\":{...}}; array ops: {\"$push\":{\"$.arr\":v}}, {\"$pull\":...}, {\"$merge\":{\"$.a\":\"$.b\"}}, {\"$sort\":{\"$.arr\":\"asc\"}}, {\"$slice\":{\"$.arr\":[0,10]}}. EXPRESSION SYNTAX for $compute/$when: JSON paths ($.field or field), literals, and functions (concat, $now, arithmetic). RECIPE USES: approval state machines (advance_*), stock level updates, auto-derivations that must write another table, notifications. REST equivalent: POST /api/srv/<board>/recipes (see recipes.list).".into(),
+        summary: "Add an automation recipe to the app.".into(),
+        description: "Registers a recipe that runs actions when its trigger event fires. TRIGGER EVENTS: \"record.created\", \"record.updated\", \"record.deleted\", \"record.inbound\" (webhook/events), \"record.cron\". --when accepts the event string or {\"event\":\"record.created\",\"table\":\"<name>\",\"when\":\"<expr>\"} to narrow to a table/condition; --match <json> is a filter on the triggering payload (same shape as records.query --filter). ACTIONS (array of objects, applied in order, all optional): {\"$compute\":{\"$.field\":\"<expr>\"}} (set derived field); {\"$set\":{\"$.field\":\"<value>\"}}; {\"$copy\":{\"$.dst\":\"$.src\"}} / {\"$move\":...}; {\"$upsert_other\":{\"table\":\"<t>\",\"record\":{...},\"unique_key\":\"$.id\"}} (write to another table); {\"$patch_other\":{\"table\":\"<t>\",\"seq\":N,\"patch\":{...}}}; {\"$resolve_other\":{\"table\":\"<t>\",\"filter\":{...},\"field\":\"id\",\"into\":\"$.x\"}} (look up one row in another table and copy a field into the payload — for name->id mapping); {\"$create_user\":{\"email\":\"{{$.email}}\",\"password\":\"...\",\"role\":\"student\",\"into\":\"$.user_id\"}} (create an engine auth user from the payload and store its email — ports auto_create_student_account); {\"$call\":{\"url\":\"...\",\"method\":\"POST\",\"body\":{...},\"headers\":{...},\"secret\":\"<name>\"}} (HTTP action; {\"secret\":\"$name\"} resolves app secrets); {\"$log\":\"msg\"}; {\"$set_state\":{\"$.stage\":\"approved\"}}; {\"$schedule\":{...}}; array ops: {\"$push\":{\"$.arr\":v}}, {\"$pull\":...}, {\"$merge\":{\"$.a\":\"$.b\"}}, {\"$sort\":{\"$.arr\":\"asc\"}}, {\"$slice\":{\"$.arr\":[0,10]}}. EXPRESSION SYNTAX for $compute/$when: JSON paths ($.field or field), literals, and functions (concat, $now, arithmetic). RECIPE USES: approval state machines (advance_*), stock level updates, auto-derivations that must write another table, notifications. REST equivalent: POST /api/recipes (see recipes.list).".into(),
         positional: vec![
-            ArgSpec {
-                name: "board".into(),
-                r#type: ArgType::Board,
-                required: true,
-                help: "The board id.".into(),
-            },
             ArgSpec {
                 name: "name".into(),
                 r#type: ArgType::Name,
@@ -1342,7 +1289,7 @@ pub fn registry() -> Vec<CommandSpec> {
         destructive: false,
         dry_run: false,
         examples: vec![Example {
-            args: "recipes add b_abc 'welcome' --when '{\"event\":\"record.created\"}' --actions '[{\"$compute\":{\"$.greeted\":true}}]'".into(),
+            args: "recipes add 'welcome' --when '{\"event\":\"record.created\"}' --actions '[{\"$compute\":{\"$.greeted\":true}}]'".into(),
             description: "Add a recipe.".into(),
             response: serde_json::json!({ "ok": true, "name": "welcome" }),
         }],
@@ -1353,14 +1300,9 @@ pub fn registry() -> Vec<CommandSpec> {
     specs.push(CommandSpec {
         group: "files".into(),
         verb: "list".into(),
-        summary: "List files stored for a board (optionally per sub-app).".into(),
+        summary: "List files stored for the app (optionally per sub-app).".into(),
         description: "Returns file references (path + size). By default lists everything (main dist + sub-apps). Pass --slug <name> to list only that sub-app, or --no_subapps to list only the main dist (excluding registered sub-app prefixes).".into(),
-        positional: vec![ArgSpec {
-            name: "board".into(),
-            r#type: ArgType::Board,
-            required: true,
-            help: "The board id.".into(),
-        }],
+        positional: vec![],
         flags: vec![
             FlagSpec {
                 name: "slug".into(),
@@ -1396,20 +1338,14 @@ pub fn registry() -> Vec<CommandSpec> {
     specs.push(CommandSpec {
         group: "files".into(),
         verb: "put".into(),
-        summary: "Store a static asset for a board (front-end hosting).".into(),
-        description: "Writes raw bytes to the board's per-board asset namespace (e.g. index.html, app.js). Pass --slug <name> to store the path inside a named sub-app (auto-registers it; the sub-app is then served at /srv/<board>/<slug> with its own index.html and SPA fallback). --title sets the sub-app's display title.".into(),
+        summary: "Store a static asset for the app (front-end hosting).".into(),
+        description: "Writes raw bytes to the tenant asset namespace (e.g. index.html, app.js). Pass --slug <name> to store the path inside a named sub-app (auto-registers it; the sub-app is then served at /srv/<slug> with its own index.html and SPA fallback). --title sets the sub-app's display title.".into(),
         positional: vec![
-            ArgSpec {
-                name: "board".into(),
-                r#type: ArgType::Board,
-                required: true,
-                help: "The board id.".into(),
-            },
             ArgSpec {
                 name: "path".into(),
                 r#type: ArgType::Path,
                 required: true,
-                help: "Asset path (within the sub-app when --slug is given, else within the board).".into(),
+                help: "Asset path (within the sub-app when --slug is given, else within the app).".into(),
             },
         ],
         flags: vec![
@@ -1450,7 +1386,7 @@ pub fn registry() -> Vec<CommandSpec> {
         destructive: false,
         dry_run: false,
         examples: vec![Example {
-            args: "files put b_abc index.html --content '<h1>hi</h1>'".into(),
+            args: "files put index.html --content '<h1>hi</h1>'".into(),
             description: "Store the main dist index.html.".into(),
             response: serde_json::json!({ "ok": true, "asset": "index.html" }),
         }],
@@ -1465,16 +1401,10 @@ pub fn registry() -> Vec<CommandSpec> {
         description: "Returns the raw bytes of a stored asset as text.".into(),
         positional: vec![
             ArgSpec {
-                name: "board".into(),
-                r#type: ArgType::Board,
-                required: true,
-                help: "The board id.".into(),
-            },
-            ArgSpec {
                 name: "path".into(),
                 r#type: ArgType::Path,
                 required: true,
-                help: "Asset path within the board.".into(),
+                help: "Asset path within the app.".into(),
             },
         ],
         flags: vec![],
@@ -1492,19 +1422,13 @@ pub fn registry() -> Vec<CommandSpec> {
         group: "files".into(),
         verb: "delete".into(),
         summary: "Delete a static asset (optionally inside a sub-app).".into(),
-        description: "Removes an asset from the board's asset namespace. Pass --slug <name> to target a file inside a sub-app without typing the slug prefix (e.g. srv files delete <board> assets/app.js --slug portal deletes portal/assets/app.js).".into(),
+        description: "Removes an asset from the app's asset namespace. Pass --slug <name> to target a file inside a sub-app without typing the slug prefix (e.g. files delete assets/app.js --slug portal deletes portal/assets/app.js).".into(),
         positional: vec![
-            ArgSpec {
-                name: "board".into(),
-                r#type: ArgType::Board,
-                required: true,
-                help: "The board id.".into(),
-            },
             ArgSpec {
                 name: "path".into(),
                 r#type: ArgType::Path,
                 required: true,
-                help: "Asset path (relative to the sub-app when --slug is given, else within the board).".into(),
+                help: "Asset path (relative to the sub-app when --slug is given, else within the app).".into(),
             },
         ],
         flags: vec![FlagSpec {
@@ -1531,13 +1455,8 @@ pub fn registry() -> Vec<CommandSpec> {
         group: "files".into(),
         verb: "upload".into(),
         summary: "Upload a file to the app's files namespace (record-backed).".into(),
-        description: "Stores raw bytes under the board's files/ object-store namespace and creates a record in the given table (default 'files'). Pass --folder <name> to organize the blob under files/<folder>/ instead of the flat files/ root. Mirrors the REST POST /api/srv/<board>/upload?folder=<name> endpoint. The blob key is returned in the record's 'file' field.".into(),
-        positional: vec![ArgSpec {
-            name: "board".into(),
-            r#type: ArgType::Board,
-            required: true,
-            help: "The board id.".into(),
-        }],
+        description: "Stores raw bytes under the app's files/ object-store namespace and creates a record in the given table (default 'files'). Pass --folder <name> to organize the blob under files/<folder>/ instead of the flat files/ root. Mirrors the REST POST /api/upload?folder=<name> endpoint. The blob key is returned in the record's 'file' field.".into(),
+        positional: vec![],
         flags: vec![
             FlagSpec {
                 name: "filename".into(),
@@ -1604,13 +1523,8 @@ pub fn registry() -> Vec<CommandSpec> {
         group: "files".into(),
         verb: "export".into(),
         summary: "Export a dist (main or sub-app) as base64 payloads.".into(),
-        description: "Returns every file of the main dist (default) or a sub-app (--slug <name>) as {path, size, content_base64}. For a portable snapshot or to pipe into files.import on another machine. Use the CLI 'srv files export --dir <path>' to write the files to disk directly.".into(),
-        positional: vec![ArgSpec {
-            name: "board".into(),
-            r#type: ArgType::Board,
-            required: true,
-            help: "The board id.".into(),
-        }],
+        description: "Returns every file of the main dist (default) or a sub-app (--slug <name>) as {path, size, content_base64}. For a portable snapshot or to pipe into files.import on another machine.".into(),
+        positional: vec![],
         flags: vec![FlagSpec {
             name: "slug".into(),
             r#type: FlagType::Str,
@@ -1635,13 +1549,8 @@ pub fn registry() -> Vec<CommandSpec> {
         group: "files".into(),
         verb: "import".into(),
         summary: "Import a dist (main or sub-app) from base64 payloads.".into(),
-        description: "Uploads files given as [{path, content_base64}] into the board (body_json). With --slug <name> the files land under <slug>/ and the sub-app is auto-registered. Re-uploading an existing path replaces it (same key). Use the CLI 'srv files import --dir <path> [--slug <name>]' to upload a whole folder.".into(),
-        positional: vec![ArgSpec {
-            name: "board".into(),
-            r#type: ArgType::Board,
-            required: true,
-            help: "The board id.".into(),
-        }],
+        description: "Uploads files given as [{path, content_base64}] into the app (body_json). With --slug <name> the files land under <slug>/ and the sub-app is auto-registered. Re-uploading an existing path replaces it (same key).".into(),
+        positional: vec![],
         flags: vec![
             FlagSpec {
                 name: "slug".into(),
@@ -1680,9 +1589,9 @@ pub fn registry() -> Vec<CommandSpec> {
     specs.push(CommandSpec {
         group: "subapps".into(),
         verb: "list".into(),
-        summary: "List a board's sub-apps (named dist folders).".into(),
-        description: "Returns every registered sub-app: its slug, optional title, index asset path and creation time. Sub-apps are standalone dists served at /srv/<board>/<slug> with their own SPA fallback (see files.put --slug).".into(),
-        positional: vec![ArgSpec { name: "board".into(), r#type: ArgType::Board, required: true, help: "The board id.".into() }],
+        summary: "List the app's sub-apps (named dist folders).".into(),
+        description: "Returns every registered sub-app: its slug, optional title, index asset path and creation time. Sub-apps are standalone dists served at /srv/<slug> with their own SPA fallback (see files.put --slug).".into(),
+        positional: vec![],
         flags: vec![],
         body_json: None,
         response: serde_json::json!({ "ok": true, "subapps": [{ "slug": "portal", "title": "Parent Portal", "index": "portal/index.html", "created_at": "..." }] }),
@@ -1690,8 +1599,8 @@ pub fn registry() -> Vec<CommandSpec> {
         destructive: false,
         dry_run: false,
         examples: vec![Example {
-            args: "subapps list b_abc".into(),
-            description: "List sub-apps on the board.".into(),
+            args: "subapps list".into(),
+            description: "List sub-apps on the app.".into(),
             response: serde_json::json!({ "ok": true, "subapps": [] }),
         }],
         see_also: vec!["files.put".into(), "subapps.remove".into()],
@@ -1704,7 +1613,6 @@ pub fn registry() -> Vec<CommandSpec> {
         summary: "Remove a sub-app's registration (optionally pruning its assets).".into(),
         description: "Deletes the sub-app registry row for a slug. Without --prune the asset files stay on disk (re-registerable later). With --prune the sub-app's folder (all files under <slug>/) is also deleted.".into(),
         positional: vec![
-            ArgSpec { name: "board".into(), r#type: ArgType::Board, required: true, help: "The board id.".into() },
             ArgSpec { name: "slug".into(), r#type: ArgType::Name, required: true, help: "The sub-app slug.".into() },
         ],
         flags: vec![FlagSpec {
@@ -1723,7 +1631,7 @@ pub fn registry() -> Vec<CommandSpec> {
         destructive: true,
         dry_run: true,
         examples: vec![Example {
-            args: "subapps remove b_abc portal --prune".into(),
+            args: "subapps remove portal --prune".into(),
             description: "Unregister the portal sub-app and delete its files.".into(),
             response: serde_json::json!({ "ok": true, "slug": "portal", "removed": true, "pruned": 2 }),
         }],
@@ -1734,15 +1642,9 @@ pub fn registry() -> Vec<CommandSpec> {
     specs.push(CommandSpec {
         group: "graph".into(),
         verb: "link".into(),
-        summary: "Create an edge between two nodes in a board's tenant.".into(),
-        description: "Links two nodes (by Helix node id) with an edge label and optional edge properties, scoped to the board tenant. Edge FTS on a property becomes searchable after the first graph.search_edges call triggers the edge text index build (async).".into(),
+        summary: "Create an edge between two nodes (requires a graph backend; unsupported on D1/memory).".into(),
+        description: "Links two nodes (by graph node id) with an edge label and optional edge properties. Requires a graph backend; the D1/memory backends report unsupported.".into(),
         positional: vec![
-            ArgSpec {
-                name: "board".into(),
-                r#type: ArgType::Board,
-                required: true,
-                help: "The board id (also the HelixDB tenantId).".into(),
-            },
             ArgSpec {
                 name: "from".into(),
                 r#type: ArgType::Seq,
@@ -1778,7 +1680,7 @@ pub fn registry() -> Vec<CommandSpec> {
         destructive: false,
         dry_run: false,
         examples: vec![Example {
-            args: "graph link b_abc 1 KNOWS 2 --props '{\"since\":\"2024\"}'".into(),
+            args: "graph link 1 KNOWS 2 --props '{\"since\":\"2024\"}'".into(),
             description: "Link nodes 1 -> 2 by KNOWS.".into(),
             response: serde_json::json!({ "ok": true, "edge": 0, "from": 1, "label": "KNOWS", "to": 2 }),
         }],
@@ -1789,19 +1691,19 @@ pub fn registry() -> Vec<CommandSpec> {
     specs.push(CommandSpec {
         group: "graph".into(),
         verb: "schema".into(),
-        summary: "Show a board's graph wiring (links + counts).".into(),
-        description: "Reports the graph wiring the engine tracks: the board's parent/child link (from wb_links) and counts of tables, recipes and jobs on the board.".into(),
-        positional: vec![ArgSpec { name: "board".into(), r#type: ArgType::Board, required: true, help: "The board id.".into() }],
+        summary: "Show the app's link wiring (links + counts).".into(),
+        description: "Reports the graph wiring the engine tracks: the app's parent/child link (from wb_links) and counts of tables, recipes and jobs on the app.".into(),
+        positional: vec![],
         flags: vec![],
         body_json: None,
-        response: serde_json::json!({ "ok": true, "board": "b_abc", "links": [], "tables": [], "recipe_count": 0, "job_count": 0 }),
+        response: serde_json::json!({ "ok": true, "tenant": "singleton", "links": [], "tables": [], "recipe_count": 0, "job_count": 0 }),
         auth: Role::Reader,
         destructive: false,
         dry_run: false,
         examples: vec![Example {
-            args: "graph schema b_abc".into(),
-            description: "Show the board's graph wiring.".into(),
-            response: serde_json::json!({ "ok": true, "board": "b_abc", "links": [], "tables": ["learners"], "recipe_count": 2, "job_count": 0 }),
+            args: "graph schema".into(),
+            description: "Show the app's graph wiring.".into(),
+            response: serde_json::json!({ "ok": true, "tenant": "singleton", "links": [], "tables": ["learners"], "recipe_count": 2, "job_count": 0 }),
         }],
         see_also: vec!["graph.link".into(), "graph.sync".into(), "links.list".into()],
         danger_notes: None,
@@ -1810,15 +1712,9 @@ pub fn registry() -> Vec<CommandSpec> {
     specs.push(CommandSpec {
         group: "graph".into(),
         verb: "unlink".into(),
-        summary: "Drop an edge by its edge id.".into(),
-        description: "Removes a specific edge (by the $id returned from graph link or graph search_edges) from the board's tenant graph. Nodes stay intact.".into(),
+        summary: "Drop an edge by its edge id (requires a graph backend).".into(),
+        description: "Removes a specific edge (by the $id returned from graph link or graph search_edges) from the tenant graph. Nodes stay intact.".into(),
         positional: vec![
-            ArgSpec {
-                name: "board".into(),
-                r#type: ArgType::Board,
-                required: true,
-                help: "The board id (also the HelixDB tenantId).".into(),
-            },
             ArgSpec {
                 name: "edge".into(),
                 r#type: ArgType::Seq,
@@ -1833,7 +1729,7 @@ pub fn registry() -> Vec<CommandSpec> {
         destructive: true,
         dry_run: true,
         examples: vec![Example {
-            args: "graph unlink b_abc 3".into(),
+            args: "graph unlink 3".into(),
             description: "Drop edge 3.".into(),
             response: serde_json::json!({ "ok": true, "edge": 3, "removed": true }),
         }],
@@ -1844,15 +1740,9 @@ pub fn registry() -> Vec<CommandSpec> {
     specs.push(CommandSpec {
         group: "graph".into(),
         verb: "delete".into(),
-        summary: "Drop a node and every edge touching it.".into(),
-        description: "Removes a node (by $id) and ALL edges connected to it in both directions. HelixDB does not cascade edge deletes on node drop, so the adapter removes touching edges explicitly first. Use for graph-level cleanup; to delete a record and its graph wiring use records.delete then graph.delete.".into(),
+        summary: "Drop a node and every edge touching it (requires a graph backend).".into(),
+        description: "Removes a node (by $id) and ALL edges connected to it in both directions (graph backends do not cascade edge deletes, so touching edges go first). Requires a graph backend. To delete a record and its graph wiring use records.delete then graph.delete.".into(),
         positional: vec![
-            ArgSpec {
-                name: "board".into(),
-                r#type: ArgType::Board,
-                required: true,
-                help: "The board id (also the HelixDB tenantId).".into(),
-            },
             ArgSpec {
                 name: "node".into(),
                 r#type: ArgType::Seq,
@@ -1867,7 +1757,7 @@ pub fn registry() -> Vec<CommandSpec> {
         destructive: true,
         dry_run: true,
         examples: vec![Example {
-            args: "graph delete b_abc 5".into(),
+            args: "graph delete 5".into(),
             description: "Drop node 5 and its edges.".into(),
             response: serde_json::json!({ "ok": true, "node": 5, "removed_edges": 2, "deleted": true }),
         }],
@@ -1878,15 +1768,9 @@ pub fn registry() -> Vec<CommandSpec> {
     specs.push(CommandSpec {
         group: "graph".into(),
         verb: "sync".into(),
-        summary: "Wire a table's records into the graph via *_id references.".into(),
+        summary: "Wire a table's records into the graph via *_id references (requires a graph backend).".into(),
         description: "Scans a table's records; for every payload field ending in _id (e.g. class_id -> table class/classes), resolves the value (target record seq) to a node id and creates an edge labeled RELATED_<FIELD> from the source record's node to the target node. Idempotent: existing (from,label,to) edges are skipped. Run after submitting records with *_id fields to make the tables traversable as a graph.".into(),
         positional: vec![
-            ArgSpec {
-                name: "board".into(),
-                r#type: ArgType::Board,
-                required: true,
-                help: "The board id (also the HelixDB tenantId).".into(),
-            },
             ArgSpec {
                 name: "table".into(),
                 r#type: ArgType::Name,
@@ -1901,7 +1785,7 @@ pub fn registry() -> Vec<CommandSpec> {
         destructive: false,
         dry_run: false,
         examples: vec![Example {
-            args: "graph sync b_abc learners".into(),
+            args: "graph sync learners".into(),
             description: "Create edges from learner.class_id to classes records.".into(),
             response: serde_json::json!({ "ok": true, "table": "learners", "created": 2, "skipped": 0, "edges": [] }),
         }],
@@ -1912,15 +1796,9 @@ pub fn registry() -> Vec<CommandSpec> {
     specs.push(CommandSpec {
         group: "graph".into(),
         verb: "traverse".into(),
-        summary: "Traverse edges from a node (out/in/both), up to depth hops.".into(),
-        description: "Walks the board's graph from a node id along an edge label (or any edge) in a direction, returning reached nodes. depth=1 is a single hop; depth>1 uses repeat. Tenant scoping is automatic.".into(),
+        summary: "Traverse edges from a node (requires a graph backend).".into(),
+        description: "Walks the app's graph from a node id along an edge label (or any edge) in a direction, returning reached nodes. depth=1 is a single hop; depth>1 uses repeat. Tenant scoping is automatic.".into(),
         positional: vec![
-            ArgSpec {
-                name: "board".into(),
-                r#type: ArgType::Board,
-                required: true,
-                help: "The board id (also the HelixDB tenantId).".into(),
-            },
             ArgSpec {
                 name: "from".into(),
                 r#type: ArgType::Seq,
@@ -1966,7 +1844,7 @@ pub fn registry() -> Vec<CommandSpec> {
         destructive: false,
         dry_run: false,
         examples: vec![Example {
-            args: "graph traverse b_abc 1 --dir out --label KNOWS --depth 2".into(),
+            args: "graph traverse 1 --dir out --label KNOWS --depth 2".into(),
             description: "2-hop outgoing traversal.".into(),
             response: serde_json::json!({ "ok": true, "nodes": [], "count": 0 }),
         }],
@@ -1977,15 +1855,9 @@ pub fn registry() -> Vec<CommandSpec> {
     specs.push(CommandSpec {
         group: "graph".into(),
         verb: "search_edges".into(),
-        summary: "Full-text search over edge properties (BM25).".into(),
-        description: "Searches a board's edges by BM25 over an edge property. The edge text index is created lazily on first search (async build); searches fall back to a Rust scan until the index is ready. Edges are tenant-scoped like nodes.".into(),
+        summary: "Full-text search over edge properties (requires a graph backend).".into(),
+        description: "Searches edges by BM25 over an edge property (requires a graph backend).".into(),
         positional: vec![
-            ArgSpec {
-                name: "board".into(),
-                r#type: ArgType::Board,
-                required: true,
-                help: "The board id (also the HelixDB tenantId).".into(),
-            },
             ArgSpec {
                 name: "label".into(),
                 r#type: ArgType::Name,
@@ -2021,7 +1893,7 @@ pub fn registry() -> Vec<CommandSpec> {
         destructive: false,
         dry_run: false,
         examples: vec![Example {
-            args: "graph search_edges b_abc KNOWS since 2024".into(),
+            args: "graph search_edges KNOWS since 2024".into(),
             description: "Find KNOWS edges with since=2024.".into(),
             response: serde_json::json!({ "ok": true, "edges": [], "count": 0 }),
         }],
@@ -2032,9 +1904,9 @@ pub fn registry() -> Vec<CommandSpec> {
     specs.push(CommandSpec {
         group: "links".into(),
         verb: "list".into(),
-        summary: "List a board's graph parent/child links.".into(),
+        summary: "List the app's graph parent/child links.".into(),
         description: "Returns the parent-child link definitions (from wb_links) that join a child table to a parent table via from_key/parent_key — the engine-declared graph wiring.".into(),
-        positional: vec![ArgSpec { name: "board".into(), r#type: ArgType::Board, required: true, help: "The board id.".into() }],
+        positional: vec![],
         flags: vec![],
         body_json: None,
         response: serde_json::json!({ "ok": true, "links": [{ "child_table": "learners", "parent_table": "classes", "from_key": "$.class_id", "parent_key": "$.id" }] }),
@@ -2042,8 +1914,8 @@ pub fn registry() -> Vec<CommandSpec> {
         destructive: false,
         dry_run: false,
         examples: vec![Example {
-            args: "links list b_abc".into(),
-            description: "List the board's links.".into(),
+            args: "links list".into(),
+            description: "List the app's links.".into(),
             response: serde_json::json!({ "ok": true, "links": [] }),
         }],
         see_also: vec!["links.show".into(), "graph.schema".into()],
@@ -2053,19 +1925,19 @@ pub fn registry() -> Vec<CommandSpec> {
     specs.push(CommandSpec {
         group: "links".into(),
         verb: "show".into(),
-        summary: "Show a board's single parent/child link (full).".into(),
-        description: "Returns the full Link record for the board, including child_board/parent_board and both key paths.".into(),
-        positional: vec![ArgSpec { name: "board".into(), r#type: ArgType::Board, required: true, help: "The board id.".into() }],
+        summary: "Show the app's single parent/child link (full).".into(),
+        description: "Returns the full Link record for the app, including child_board/parent_board and both key paths.".into(),
+        positional: vec![],
         flags: vec![],
         body_json: None,
-        response: serde_json::json!({ "ok": true, "child_board": "b_abc", "child_table": "learners", "parent_board": "b_abc", "parent_table": "classes", "from_key": "$.class_id", "parent_key": "$.id" }),
+        response: serde_json::json!({ "ok": true, "child_board": "singleton", "child_table": "learners", "parent_board": "singleton", "parent_table": "classes", "from_key": "$.class_id", "parent_key": "$.id" }),
         auth: Role::Reader,
         destructive: false,
         dry_run: false,
         examples: vec![Example {
-            args: "links show b_abc".into(),
-            description: "Show the board's link.".into(),
-            response: serde_json::json!({ "ok": true, "child_board": "b_abc", "child_table": "learners" }),
+            args: "links show".into(),
+            description: "Show the app's link.".into(),
+            response: serde_json::json!({ "ok": true, "child_board": "singleton", "child_table": "learners" }),
         }],
         see_also: vec!["links.list".into()],
         danger_notes: None,
@@ -2074,20 +1946,14 @@ pub fn registry() -> Vec<CommandSpec> {
     specs.push(CommandSpec {
         group: "jobs".into(),
         verb: "add".into(),
-        summary: "Schedule a cron job on a board.".into(),
+        summary: "Schedule a cron job on the app.".into(),
         description: "Registers a cron job that runs an http/poll action on the given schedule.".into(),
         positional: vec![
-            ArgSpec {
-                name: "board".into(),
-                r#type: ArgType::Board,
-                required: true,
-                help: "The board id.".into(),
-            },
             ArgSpec {
                 name: "name".into(),
                 r#type: ArgType::Name,
                 required: true,
-                help: "Unique job name (per board).".into(),
+                help: "Unique job name.".into(),
             },
             ArgSpec {
                 name: "schedule".into(),
@@ -2112,7 +1978,7 @@ pub fn registry() -> Vec<CommandSpec> {
         destructive: false,
         dry_run: false,
         examples: vec![Example {
-            args: "jobs add b_abc 'heartbeat' '*/30 * * * * *' --action '{\"type\":\"http\",\"url\":\"https://example.com/ping\"}'".into(),
+            args: "jobs add 'heartbeat' '*/30 * * * * *' --action '{\"type\":\"http\",\"url\":\"https://example.com/ping\"}'".into(),
             description: "Schedule a job every 30 seconds.".into(),
             response: serde_json::json!({ "ok": true, "name": "heartbeat", "schedule": "*/30 * * * * *" }),
         }],
@@ -2123,14 +1989,9 @@ pub fn registry() -> Vec<CommandSpec> {
     specs.push(CommandSpec {
         group: "jobs".into(),
         verb: "list".into(),
-        summary: "List cron jobs for a board.".into(),
+        summary: "List cron jobs for the app.".into(),
         description: "Returns jobs with their schedule and last run status.".into(),
-        positional: vec![ArgSpec {
-            name: "board".into(),
-            r#type: ArgType::Board,
-            required: true,
-            help: "The board id.".into(),
-        }],
+        positional: vec![],
         flags: vec![],
         body_json: None,
         response: serde_json::json!({ "ok": true, "jobs": [] }),
@@ -2148,7 +2009,6 @@ pub fn registry() -> Vec<CommandSpec> {
         summary: "Show one cron job's full definition.".into(),
         description: "Returns a single job including its schedule, action JSON, next/last run times and creation time.".into(),
         positional: vec![
-            ArgSpec { name: "board".into(), r#type: ArgType::Board, required: true, help: "The board id.".into() },
             ArgSpec { name: "name".into(), r#type: ArgType::Name, required: true, help: "Job name.".into() },
         ],
         flags: vec![],
@@ -2158,7 +2018,7 @@ pub fn registry() -> Vec<CommandSpec> {
         destructive: false,
         dry_run: false,
         examples: vec![Example {
-            args: "jobs show b_abc heartbeat".into(),
+            args: "jobs show heartbeat".into(),
             description: "Show the 'heartbeat' job's full definition.".into(),
             response: serde_json::json!({ "ok": true, "name": "heartbeat", "schedule": "*/30 * * * * *" }),
         }],
@@ -2169,14 +2029,9 @@ pub fn registry() -> Vec<CommandSpec> {
     specs.push(CommandSpec {
         group: "jobs".into(),
         verb: "runs".into(),
-        summary: "List recent job runs for a board.".into(),
+        summary: "List recent job runs for the app.".into(),
         description: "Returns run history (status, duration, message).".into(),
-        positional: vec![ArgSpec {
-            name: "board".into(),
-            r#type: ArgType::Board,
-            required: true,
-            help: "The board id.".into(),
-        }],
+        positional: vec![],
         flags: vec![
             FlagSpec {
                 name: "job".into(),
@@ -2215,12 +2070,6 @@ pub fn registry() -> Vec<CommandSpec> {
         summary: "Remove a cron job.".into(),
         description: "Deletes the job and stops future scheduling.".into(),
         positional: vec![
-            ArgSpec {
-                name: "board".into(),
-                r#type: ArgType::Board,
-                required: true,
-                help: "The board id.".into(),
-            },
             ArgSpec {
                 name: "name".into(),
                 r#type: ArgType::Name,

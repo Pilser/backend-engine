@@ -18,18 +18,17 @@ fn to_record(row: Row) -> anyhow::Result<Record> {
     serde_json::from_value(row.data).map_err(Into::into)
 }
 
-pub fn query_records(
+pub async fn query_records(
     db: &dyn Database,
-    board_id: &str,
     table: &str,
     filter: &SrvFilter,
     orders: &[(String, bool)],
     limit: usize,
     offset: usize,
 ) -> anyhow::Result<Vec<Record>> {
-    let cfg = crate::crud::load_table(db, board_id, table)?;
+    let cfg = crate::crud::load_table(db, table).await?;
     let limit = limit.clamp(1, 500);
-    let mut conds = vec![crate::crud::board_cond(board_id), crate::crud::table_cond(table)];
+    let mut conds = vec![crate::crud::table_cond(table)];
     conds.extend(filter.conds.clone());
     let q = Query {
         filter: SrvFilter { conds },
@@ -39,7 +38,7 @@ pub fn query_records(
         ttl: table_ttl_clause(&cfg),
     };
     let mut recs = Vec::new();
-    for row in db.query(TABLE_RECORDS, &q)?.rows {
+    for row in db.query(TABLE_RECORDS, &q).await?.rows {
         let mut rec = to_record(row)?;
         rec.payload = crate::schema::apply_redact(&cfg, &rec.payload);
         recs.push(rec);
@@ -75,9 +74,8 @@ fn highlight(text: &str, query: &str) -> String {
     out
 }
 
-pub fn search_records(
+pub async fn search_records(
     db: &dyn Database,
-    board_id: &str,
     table: &str,
     query: &str,
     conds: &SrvFilter,
@@ -85,9 +83,9 @@ pub fn search_records(
     offset: usize,
     snippet: bool,
 ) -> anyhow::Result<Vec<Record>> {
-    let cfg = crate::crud::load_table(db, board_id, table)?;
+    let cfg = crate::crud::load_table(db, table).await?;
     let limit = limit.clamp(1, 500);
-    let mut all = vec![crate::crud::board_cond(board_id), crate::crud::table_cond(table)];
+    let mut all = vec![crate::crud::table_cond(table)];
     all.push(FilterCond {
         field: "_".to_string(),
         op: Op::Search,
@@ -102,7 +100,7 @@ pub fn search_records(
         ttl: table_ttl_clause(&cfg),
     };
     let mut recs = Vec::new();
-    for row in db.query(TABLE_RECORDS, &q)?.rows {
+    for row in db.query(TABLE_RECORDS, &q).await?.rows {
         let mut rec = to_record(row)?;
         rec.payload = crate::schema::apply_redact(&cfg, &rec.payload);
         if snippet && !query.trim().is_empty() {
@@ -114,27 +112,26 @@ pub fn search_records(
     Ok(recs)
 }
 
-pub fn aggregate_records(
+pub async fn aggregate_records(
     db: &dyn Database,
-    board_id: &str,
     table: &str,
     conds_orig: &SrvFilter,
     agg: Agg,
     field: Option<&str>,
     group_by: Option<&str>,
 ) -> anyhow::Result<Vec<Json>> {
-    let cfg = crate::crud::load_table(db, board_id, table)?;
+    let cfg = crate::crud::load_table(db, table).await?;
     if agg != Agg::Count && field.is_none() {
         anyhow::bail!("field is required for {agg:?}");
     }
     db.aggregate(
         TABLE_RECORDS,
-        board_id,
+        crate::TENANT,
         table,
         conds_orig,
         agg,
         field,
         group_by,
         table_ttl_clause(&cfg),
-    )
+    ).await
 }

@@ -1,5 +1,15 @@
 # serverlessEngine — Full Feature Reference
 
+> **Workers-port deltas (2026-09-26, see `PORT-TRACK.md`):** single tenant —
+> no `{board}` routing, no app create/list/delete (one `TENANT` row); schema
+> validation is an allowlist subset (required/types/properties/items/enum/
+> ranges), NOT the `jsonschema` crate; passwords are salted SHA-256 (`v1$…`,
+> no bcrypt); Microsoft SSO removed; engine + storage seam are `async`
+> (`async_trait(?Send)`); links filter by `child_board` (the old `$.board_id`
+> filter never matched — fixed); `GET /api/events` is 501 until the
+> `TenantDO` fan-out lands. The `§0` status table and `/api/srv/{board}`
+> paths below describe the reference daemon, not this worker.
+
 > **Scope:** This document covers ONLY the serverless engine (the `zw-db` data layer, the `zw-expr` expression language, the `zw-recipe` automation engine, and the `ch-web-ui` HTTP/WebSocket/SSE transport that exposes it). It does **not** cover the chat, whiteboard, materials, channel, or ZeroClaw plumbing of zerowrapper, except where they intersect the engine.
 >
 > Source of truth: `zerowrapper/zw-db/`, `zerowrapper/zw-expr/`, `zerowrapper/zw-recipe/`, `zerowrapper/crates/ch-web-ui/src/routes/serverless{,_ws,_sse}.rs`, `zerowrapper/zw-mcp/src/srv.rs`.
@@ -193,7 +203,7 @@ A board is the top-level container — the "serverless app". Stored as a row in 
 All writes funnel through `prepare_payload` which runs, in order:
 1. **computed fields** (`apply_computed`)
 2. **custom validation rules** (`validate_rules`)
-3. **JSON Schema validation** (`jsonschema` crate, formats enabled)
+3. **JSON Schema validation** (allowlist subset in the worker port; was the `jsonschema` crate with formats enabled)
 
 ### 5.1 Insert & Upsert — `srv_record_insert(board_id, payload, writer, upsert)`
 - Computes next `seq = MAX(seq)+1`, inserts in a transaction, then appends an audit `created` row.
@@ -287,7 +297,7 @@ Path parsing: `a.b[2].c`, leading `$` optional; `PathSeg::Key` / `PathSeg::Idx`.
 ## 7. Schema, Computed, Validate, Redact (`logic.rs`)
 
 ### 7.1 JSON Schema validation
-- `wb_apps.schema_json` validated on **every write** via the `jsonschema` crate (`should_validate_formats(true)`).
+- `wb_apps.schema_json` validated on **every write** (worker port: allowlist validator; was the `jsonschema` crate with `should_validate_formats(true)`).
 - Errors: `payload failed schema: …`.
 
 ### 7.2 Computed fields (`computed_json`)

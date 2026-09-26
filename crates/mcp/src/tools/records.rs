@@ -3,30 +3,27 @@ use engine::model::Principal;
 use engine::ServerlessEngine;
 use serde_json::{json, Value as Json};
 
-pub fn submit(
+pub async fn submit(
     engine: &mut ServerlessEngine,
     principal: &Principal,
     arguments: &Json,
 ) -> Result<Json, String> {
-    let board = arg_str(arguments, "board")?;
     let table = arg_str(arguments, "table")?;
     let payload = arguments
         .get("payload")
         .cloned()
         .ok_or_else(|| "missing argument 'payload'".to_string())?;
     let upsert = arguments.get("upsert").and_then(|u| u.as_bool()).unwrap_or(false);
-    let seq = engine
-        .insert_record(&board, &table, payload, Some(&principal.id), upsert, principal)
+    let seq = engine.insert_record(&table, payload, Some(&principal.id), upsert, principal).await
         .map_err(|e| e.to_string())?;
     ok(json!({ "seq": seq }))
 }
 
-pub fn import_records(
+pub async fn import_records(
     engine: &mut ServerlessEngine,
     principal: &Principal,
     arguments: &Json,
 ) -> Result<Json, String> {
-    let board = arg_str(arguments, "board")?;
     let table = arg_str(arguments, "table")?;
     let format = arguments.get("format").and_then(|f| f.as_str()).unwrap_or("json").to_string();
     let data = arg_str(arguments, "data")?;
@@ -36,18 +33,16 @@ pub fn import_records(
         .and_then(|s| s.chars().next())
         .unwrap_or(',');
     let upsert = arguments.get("upsert").and_then(|u| u.as_bool()).unwrap_or(false);
-    let report = engine
-        .import_records(&board, &table, &format, &data, separator, upsert, principal)
+    let report = engine.import_records(&table, &format, &data, separator, upsert, principal).await
         .map_err(|e| e.to_string())?;
     ok(report)
 }
 
-pub fn bulk(
+pub async fn bulk(
     engine: &mut ServerlessEngine,
     principal: &Principal,
     arguments: &Json,
 ) -> Result<Json, String> {
-    let board = arg_str(arguments, "board")?;
     let table = arg_str(arguments, "table")?;
     let records = arguments
         .get("records")
@@ -58,38 +53,33 @@ pub fn bulk(
     let migrate = arguments.get("migrate").and_then(|m| m.as_bool()).unwrap_or(false);
     let writer = principal.writer.clone();
     let seqs = if migrate {
-        engine
-            .bulk_import(&board, &table, records.clone(), writer.as_deref(), principal)
+        engine.bulk_import(&table, records.clone(), writer.as_deref(), principal).await
             .map_err(|e| e.to_string())?
     } else {
-        engine
-            .bulk_insert(&board, &table, records.clone(), writer.as_deref(), upsert, principal)
+        engine.bulk_insert(&table, records.clone(), writer.as_deref(), upsert, principal).await
             .map_err(|e| e.to_string())?
     };
     ok(json!({ "seqs": seqs, "migrate": migrate }))
 }
 
-pub fn get(
+pub async fn get(
     engine: &ServerlessEngine,
     _principal: &Principal,
     arguments: &Json,
 ) -> Result<Json, String> {
-    let board = arg_str(arguments, "board")?;
     let table = arg_str(arguments, "table")?;
     let seq = arg_i64(arguments, "seq", 0);
-    let record = engine
-        .get_record(&board, &table, seq)
+    let record = engine.get_record(&table, seq).await
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("record {seq} not found"))?;
     ok(serde_json::to_value(&record).map_err(|e| e.to_string())?)
 }
 
-pub fn list(
+pub async fn list(
     engine: &ServerlessEngine,
     _principal: &Principal,
     arguments: &Json,
 ) -> Result<Json, String> {
-    let board = arg_str(arguments, "board")?;
     let table = arg_str(arguments, "table")?;
     let limit = arg_i64(arguments, "limit", 50).min(500).max(1) as usize;
     let offset = arg_i64(arguments, "offset", 0) as usize;
@@ -97,8 +87,7 @@ pub fn list(
     if !matches!(dir.as_str(), "asc" | "desc") {
         return Err("dir must be one of: asc | desc".into());
     }
-    let records = engine
-        .list_records(&board, &table, limit, None, offset, &dir)
+    let records = engine.list_records(&table, limit, None, offset, &dir).await
         .map_err(|e| e.to_string())?;
     let out: Vec<Json> = records
         .into_iter()
@@ -107,12 +96,11 @@ pub fn list(
     ok(json!({ "records": out }))
 }
 
-pub fn query(
+pub async fn query(
     engine: &ServerlessEngine,
     _principal: &Principal,
     arguments: &Json,
 ) -> Result<Json, String> {
-    let board = arg_str(arguments, "board")?;
     let table = arg_str(arguments, "table")?;
     let limit = arg_i64(arguments, "limit", 50).min(500).max(1) as usize;
     let offset = arg_i64(arguments, "offset", 0) as usize;
@@ -136,14 +124,13 @@ pub fn query(
     let unfiltered = filter.conds.is_empty()
         && !arguments.get("order").and_then(|o| o.as_array()).map(|a| !a.is_empty()).unwrap_or(false);
     if unfiltered && !arguments.get("allow_unfiltered").and_then(|a| a.as_bool()).unwrap_or(false) {
-        let count = engine
-            .aggregate_records(&board, &table, &engine::storage::ir::SrvFilter::new(), engine::storage::ir::Agg::Count, None, None)
+        let count = engine.aggregate_records(&table, &engine::storage::ir::SrvFilter::new(), engine::storage::ir::Agg::Count, None, None).await
             .ok()
             .and_then(|rows| rows.first().and_then(|r| r.get("value").and_then(|v| v.as_f64())))
             .unwrap_or(0.0) as i64;
         if count > 1000 {
             return Err(format!(
-                "records.query without a filter would return ~{count} rows (table '{table}' on board '{board}'). \
+                "records.query without a filter would return ~{count} rows (table '{table}'). \
                  Use a --filter to narrow the scan, or use one of the specialised tools instead:\n\
                  \x20 • records.aggregate — count/sum/avg/min/max without pulling rows\n\
                  \x20 • records.list — bounded page of the latest records\n\
@@ -152,8 +139,7 @@ pub fn query(
             ));
         }
     }
-    let records = engine
-        .query_records(&board, &table, &filter, &orders, limit, offset)
+    let records = engine.query_records(&table, &filter, &orders, limit, offset).await
         .map_err(|e| e.to_string())?;
     let out: Vec<Json> = records
         .into_iter()
@@ -162,18 +148,16 @@ pub fn query(
     ok(json!({ "records": out }))
 }
 
-pub fn search(
+pub async fn search(
     engine: &ServerlessEngine,
     _principal: &Principal,
     arguments: &Json,
 ) -> Result<Json, String> {
-    let board = arg_str(arguments, "board")?;
     let table = arg_str(arguments, "table")?;
     let q = arg_str(arguments, "q")?;
     let limit = arg_i64(arguments, "limit", 50).min(500).max(1) as usize;
     let offset = arg_i64(arguments, "offset", 0) as usize;
-    let records = engine
-        .search_records(&board, &table, &q, &engine::storage::ir::SrvFilter::new(), limit, offset, false)
+    let records = engine.search_records(&table, &q, &engine::storage::ir::SrvFilter::new(), limit, offset, false).await
         .map_err(|e| e.to_string())?;
     let out: Vec<Json> = records
         .into_iter()
@@ -182,12 +166,11 @@ pub fn search(
     ok(json!({ "records": out }))
 }
 
-pub fn aggregate(
+pub async fn aggregate(
     engine: &ServerlessEngine,
     _principal: &Principal,
     arguments: &Json,
 ) -> Result<Json, String> {
-    let board = arg_str(arguments, "board")?;
     let table = arg_str(arguments, "table")?;
     let agg_str = arg_str(arguments, "agg")?;
     let agg = engine::storage::ir::Agg::parse(agg_str).map_err(|e| e.to_string())?;
@@ -198,24 +181,47 @@ pub fn aggregate(
         Json::Null => engine::storage::ir::SrvFilter::new(),
         other => engine::storage::ir::parse_filter(&other).map_err(|e| e.to_string())?,
     };
-    let rows = engine
-        .aggregate_records(&board, &table, &filter, agg, field.as_deref(), group_by.as_deref())
+    let rows = engine.aggregate_records(&table, &filter, agg, field.as_deref(), group_by.as_deref()).await
         .map_err(|e| e.to_string())?;
     ok(json!({ "agg": agg_str, "results": rows }))
 }
 
-pub fn delete(
+pub async fn delete(
     engine: &mut ServerlessEngine,
     _principal: &Principal,
     arguments: &Json,
 ) -> Result<Json, String> {
-    let board = arg_str(arguments, "board")?;
     let table = arg_str(arguments, "table")?;
     let seq = arg_i64(arguments, "seq", 0);
-    engine
-        .delete_record(&board, &table, seq)
+    engine.delete_record(&table, seq).await
         .map_err(|e| e.to_string())?;
     ok(json!({ "seq": seq, "deleted": true }))
+}
+
+pub async fn update(
+    engine: &mut ServerlessEngine,
+    principal: &Principal,
+    arguments: &Json,
+) -> Result<Json, String> {
+    let table = arg_str(arguments, "table")?;
+    let seq = arguments.get("seq").and_then(|v| v.as_i64()).ok_or_else(|| "missing argument 'seq'".to_string())?;
+    let payload = arguments.get("payload").cloned().ok_or_else(|| "missing argument 'payload'".to_string())?;
+    engine.set_record(&table, seq, payload, Some(&principal.id)).await
+        .map_err(|e| e.to_string())?;
+    ok(json!({ "seq": seq, "updated": true }))
+}
+
+pub async fn patch(
+    engine: &mut ServerlessEngine,
+    principal: &Principal,
+    arguments: &Json,
+) -> Result<Json, String> {
+    let table = arg_str(arguments, "table")?;
+    let seq = arguments.get("seq").and_then(|v| v.as_i64()).ok_or_else(|| "missing argument 'seq'".to_string())?;
+    let patch = arguments.get("patch").cloned().ok_or_else(|| "missing argument 'patch' (ops object)".to_string())?;
+    let merged = engine.patch_record(&table, seq, &patch, Some(&principal.id)).await
+        .map_err(|e| e.to_string())?;
+    ok(json!({ "seq": seq, "payload": merged }))
 }
 
 pub fn _unused(_: i64) {}

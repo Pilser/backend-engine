@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use serde_json::{json, Value as Json};
 use std::sync::OnceLock;
 
@@ -6,8 +7,9 @@ pub enum HttpBody {
     Raw { content_type: String, bytes: Vec<u8> },
 }
 
+#[async_trait(?Send)]
 pub trait HttpCaller: Send + Sync + 'static {
-    fn call(
+    async fn call(
         &self,
         url: &str,
         headers: &[(String, String)],
@@ -18,8 +20,9 @@ pub trait HttpCaller: Send + Sync + 'static {
 
 pub struct StubCaller;
 
+#[async_trait(?Send)]
 impl HttpCaller for StubCaller {
-    fn call(
+    async fn call(
         &self,
         _url: &str,
         _headers: &[(String, String)],
@@ -36,23 +39,23 @@ pub fn install(caller: Box<dyn HttpCaller>) {
     let _ = CALLER.set(caller);
 }
 
-pub fn http_call(
+pub async fn http_call(
     url: &str,
     headers: &[(String, String)],
     body: &Json,
     timeout_ms: u64,
 ) -> anyhow::Result<(u16, Json)> {
-    http_call_body(url, headers, &HttpBody::Json(body.clone()), timeout_ms)
+    http_call_body(url, headers, &HttpBody::Json(body.clone()), timeout_ms).await
 }
 
-pub fn http_call_body(
+pub async fn http_call_body(
     url: &str,
     headers: &[(String, String)],
     body: &HttpBody,
     timeout_ms: u64,
 ) -> anyhow::Result<(u16, Json)> {
     match CALLER.get() {
-        Some(c) => c.call(url, headers, body, timeout_ms),
-        None => StubCaller.call(url, headers, body, timeout_ms),
+        Some(c) => c.call(url, headers, body, timeout_ms).await,
+        None => StubCaller.call(url, headers, body, timeout_ms).await,
     }
 }

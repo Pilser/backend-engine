@@ -1,16 +1,8 @@
 use crate::model::{Job, JobRun, Key};
 use crate::storage::database::{Database, Query, Row};
 use crate::storage::ir::{FilterCond, Op, SrvFilter};
-use crate::tables::{scoped_key, TABLE_JOBS, TABLE_JOB_RUNS};
+use crate::tables::{tenant_key, TABLE_JOBS, TABLE_JOB_RUNS};
 use serde_json::{json, Value as Json};
-
-fn board_cond(board_id: &str) -> FilterCond {
-    FilterCond {
-        field: "$.board_id".to_string(),
-        op: Op::Eq,
-        value: Json::String(board_id.to_string()),
-    }
-}
 
 fn name_cond(name: &str) -> FilterCond {
     FilterCond {
@@ -20,13 +12,12 @@ fn name_cond(name: &str) -> FilterCond {
     }
 }
 
-fn job_key(board_id: &str, name: &str) -> Key {
-    Key::text(scoped_key(board_id, name))
+fn job_key(name: &str) -> Key {
+    Key::text(tenant_key(name))
 }
 
-pub fn job_add(
+pub async fn job_add(
     db: &mut dyn Database,
-    board_id: &str,
     name: &str,
     schedule: &str,
     action: &Json,
@@ -36,7 +27,6 @@ pub fn job_add(
     let next_iso = crate::cron::fmt_iso(next);
     let now = crate::crud::now_str();
     let data = json!({
-        "board_id": board_id,
         "name": name,
         "schedule": schedule,
         "action": action,
@@ -45,15 +35,15 @@ pub fn job_add(
     });
     db.delete(
         TABLE_JOBS,
-        &SrvFilter { conds: vec![board_cond(board_id), name_cond(name)] },
-    )?;
-    db.insert(TABLE_JOBS, Row::new(job_key(board_id, name), data))?;
+        &SrvFilter { conds: vec![name_cond(name)] },
+    ).await?;
+    db.insert(TABLE_JOBS, Row::new(job_key(name), data)).await?;
     Ok(next_iso)
 }
 
-pub fn job_list(db: &dyn Database, board_id: &str) -> anyhow::Result<Vec<Job>> {
+pub async fn job_list(db: &dyn Database) -> anyhow::Result<Vec<Job>> {
     let q = Query {
-        filter: SrvFilter { conds: vec![board_cond(board_id)] },
+        filter: SrvFilter { conds: Vec::new() },
         orders: vec![("$.created_at".to_string(), false)],
         limit: usize::MAX,
         offset: 0,
@@ -61,29 +51,29 @@ pub fn job_list(db: &dyn Database, board_id: &str) -> anyhow::Result<Vec<Job>> {
         ttl: None,
     };
     let mut out = Vec::new();
-    for row in db.query(TABLE_JOBS, &q)?.rows {
+    for row in db.query(TABLE_JOBS, &q).await?.rows {
         out.push(serde_json::from_value(row.data)?);
     }
     Ok(out)
 }
 
-pub fn job_get(db: &dyn Database, board_id: &str, name: &str) -> anyhow::Result<Option<Job>> {
-    let key = job_key(board_id, name);
-    let Some(row) = db.get(TABLE_JOBS, &key)? else {
+pub async fn job_get(db: &dyn Database, name: &str) -> anyhow::Result<Option<Job>> {
+    let key = job_key(name);
+    let Some(row) = db.get(TABLE_JOBS, &key).await? else {
         return Ok(None);
     };
     Ok(serde_json::from_value(row.data)?)
 }
 
-pub fn job_remove(db: &mut dyn Database, board_id: &str, name: &str) -> anyhow::Result<bool> {
+pub async fn job_remove(db: &mut dyn Database, name: &str) -> anyhow::Result<bool> {
     let n = db.delete(
         TABLE_JOBS,
-        &SrvFilter { conds: vec![board_cond(board_id), name_cond(name)] },
-    )?;
+        &SrvFilter { conds: vec![name_cond(name)] },
+    ).await?;
     Ok(n > 0)
 }
 
-pub fn job_due(db: &dyn Database, now_iso: &str, limit: usize) -> anyhow::Result<Vec<Job>> {
+pub async fn job_due(db: &dyn Database, now_iso: &str, limit: usize) -> anyhow::Result<Vec<Job>> {
     let q = Query {
         filter: SrvFilter {
             conds: vec![FilterCond {
@@ -98,7 +88,7 @@ pub fn job_due(db: &dyn Database, now_iso: &str, limit: usize) -> anyhow::Result
         ttl: None,
     };
     let mut out = Vec::new();
-    for row in db.query(TABLE_JOBS, &q)?.rows {
+    for row in db.query(TABLE_JOBS, &q).await?.rows {
         if out.len() >= limit {
             break;
         }
@@ -111,14 +101,13 @@ pub fn job_due(db: &dyn Database, now_iso: &str, limit: usize) -> anyhow::Result
     Ok(out)
 }
 
-pub fn job_reschedule(
+pub async fn job_reschedule(
     db: &mut dyn Database,
-    board_id: &str,
     name: &str,
     next_iso: Option<&str>,
 ) -> anyhow::Result<()> {
-    let key = job_key(board_id, name);
-    let Some(row) = db.get(TABLE_JOBS, &key)? else {
+    let key = job_key(name);
+    let Some(row) = db.get(TABLE_JOBS, &key).await? else {
         return Ok(());
     };
     let mut data = row.data;
@@ -128,33 +117,31 @@ pub fn job_reschedule(
             data.as_object_mut().map(|m| m.remove("next_run_at"));
         }
     }
-    db.update(TABLE_JOBS, &key, &data)?;
+    db.update(TABLE_JOBS, &key, &data).await?;
     Ok(())
 }
 
-pub fn job_mark(
+pub async fn job_mark(
     db: &mut dyn Database,
-    board_id: &str,
     name: &str,
     last_run_at: &str,
     status: &str,
     message: &str,
 ) -> anyhow::Result<()> {
-    let key = job_key(board_id, name);
-    let Some(row) = db.get(TABLE_JOBS, &key)? else {
+    let key = job_key(name);
+    let Some(row) = db.get(TABLE_JOBS, &key).await? else {
         return Ok(());
     };
     let mut data = row.data;
     data["last_run_at"] = Json::String(last_run_at.to_string());
     data["last_status"] = Json::String(status.to_string());
     data["last_message"] = Json::String(message.to_string());
-    db.update(TABLE_JOBS, &key, &data)?;
+    db.update(TABLE_JOBS, &key, &data).await?;
     Ok(())
 }
 
-pub fn job_run_insert(
+pub async fn job_run_insert(
     db: &mut dyn Database,
-    board_id: &str,
     job_name: &str,
     triggered_at: &str,
     duration_ms: i64,
@@ -163,7 +150,6 @@ pub fn job_run_insert(
     result: &str,
 ) -> anyhow::Result<()> {
     let data = json!({
-        "board_id": board_id,
         "job_name": job_name,
         "triggered_at": triggered_at,
         "duration_ms": duration_ms,
@@ -171,17 +157,16 @@ pub fn job_run_insert(
         "message": message,
         "result": result,
     });
-    db.insert(TABLE_JOB_RUNS, Row::new(Key::Int(0), data))?;
+    db.insert(TABLE_JOB_RUNS, Row::new(Key::Int(0), data)).await?;
     Ok(())
 }
 
-pub fn job_runs(
+pub async fn job_runs(
     db: &dyn Database,
-    board_id: &str,
     job_name: Option<&str>,
     limit: usize,
 ) -> anyhow::Result<Vec<JobRun>> {
-    let mut conds = vec![board_cond(board_id)];
+    let mut conds = Vec::new();
     if let Some(n) = job_name {
         conds.push(FilterCond {
             field: "$.job_name".to_string(),
@@ -198,7 +183,7 @@ pub fn job_runs(
         ttl: None,
     };
     let mut out = Vec::new();
-    for row in db.query(TABLE_JOB_RUNS, &q)?.rows {
+    for row in db.query(TABLE_JOB_RUNS, &q).await?.rows {
         out.push(serde_json::from_value(row.data)?);
     }
     Ok(out)

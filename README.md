@@ -34,6 +34,11 @@ no tribal knowledge. An AI agent can read the route list and operate the entire 
 provision tables, set validation, wire cross-table sync, schedule jobs, rotate keys.
 JavaScript frontends get the same API with `fetch`. JS second, but first-class.
 
+Agents get a third door: **one MCP tool** (`manage_serverless_engine`) that speaks CLI —
+`records submit notes '{"body":"hi"}'`, with `--help` at every level. No MCP client?
+The same commands run over plain HTTP: `GET /mcp?command=records+list+notes`
+or `POST /mcp {"command":"..."}`. One grammar, three doors, zero setup for the URL one.
+
 ## Where this came from
 
 This engine was converted from a **multi-tenant standalone serverless engine** — a Rust
@@ -66,9 +71,14 @@ Full inventory: [`docs/FEATURES.md`](docs/FEATURES.md). Big picture: [`docs/OVER
 ## Run it
 
 ```sh
-# local edge dev (once crates/worker lands)
+# one-time infra (ids go into wrangler.toml)
+wrangler d1 create serverless-worker
+wrangler r2 bucket create serverless-worker-store
+wrangler queues create webhook-deliveries
+
+# local edge dev
 cp .env.example .dev.vars   # fill WORKER_KEY, SECRET_KEY — never commit
-wrangler dev
+wrangler dev                # then exercise the Phase 8 matrix in PORT-TRACK.md
 
 # ship it — binary always comes from CI, secrets from env, never files
 export CLOUDFLARE_API_TOKEN=... SECRET_KEY=... WORKER_KEY=...
@@ -80,9 +90,16 @@ No ports. No database URLs. Storage is bindings (`DB`, `STORE`, `TENANT_DO` in
 
 ## Status & roadmap
 
-- ✅ Engine core ported, tested, WASM-clean (`cargo check -p engine --target wasm32-unknown-unknown`)
-- ✅ CI builds the deploy binary (`worker-dist/` artifact) + forbidden-crate gate
-- 🔨 Next: `crates/worker` — D1/R2 adapters, fetch router, scheduled triggers, TenantDO
-- 🔜 Agent discovery pack (machine-readable route index), usage metering per tenant
+- ✅ Engine core: single-tenant, async, WASM-clean (no tokio/bcrypt/jsonschema)
+- ✅ Contract tests: 14 engine flows + MCP agent-surface smoke (`cargo test` in CI)
+- ✅ `crates/worker`: D1/R2 adapters, full fetch router (~60 routes), Cron +
+  Queue webhook pipeline, `TenantDO` (usage/rate/sweep)
+- ✅ CI builds the deploy binary (`worker-dist/` artifact) + forbidden-crate
+  gates + wasm size gate
+- 🔨 Next: live verification — `wrangler dev`, D1/R2 provisioning, deploy
+  (see `PORT-TRACK.md` Phase 8 test matrix)
+- 🔜 Realtime WS/SSE fan-out behind `TenantDO` (`GET /api/events` is 501),
+  Analytics-Engine usage pipeline, multipart upload
 
 Port map for contributors and agents: [`WORKER-PORT-GUIDE.md`](WORKER-PORT-GUIDE.md).
+Execution tracker: [`PORT-TRACK.md`](PORT-TRACK.md).

@@ -53,11 +53,18 @@ put_secret WORKER_KEY "${WORKER_KEY:-}"
 
 if [[ "$SECRETS_ONLY" == "1" ]]; then echo "secrets synced, no deploy (--secrets-only)."; exit 0; fi
 
+# One-time infra (idempotent): D1/R2 ids must already be pasted into
+# wrangler.toml (see README). The webhook queue is account-level — create it
+# if missing; without it the scheduler delivers webhooks inline.
+echo "== ensuring webhook queue exists =="
+wrangler queues create webhook-deliveries 2>/dev/null || echo "(queue already exists or creation deferred — inline delivery fallback applies)"
+
 if [[ -n "$ARTIFACT" ]]; then
   [[ -f "$ARTIFACT/shim.mjs" ]] || { echo "artifact dir $ARTIFACT missing shim.mjs" >&2; exit 1; }
   echo "== deploying prebuilt artifact $ARTIFACT =="
-  cp "$ARTIFACT/shim.mjs" build/worker/shim.mjs 2>/dev/null || { mkdir -p build/worker && cp "$ARTIFACT/shim.mjs" build/worker/shim.mjs; }
-  [[ -f "$ARTIFACT/worker.wasm" ]] && cp "$ARTIFACT/worker.wasm" build/worker/worker.wasm
+  mkdir -p build/serverless-worker
+  cp "$ARTIFACT/shim.mjs" build/serverless-worker/shim.mjs
+  [[ -f "$ARTIFACT/serverless-worker.wasm" ]] && cp "$ARTIFACT/serverless-worker.wasm" build/serverless-worker/serverless-worker.wasm
   SKIP_BUILD=1
 fi
 

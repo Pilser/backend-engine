@@ -1,27 +1,21 @@
 use crate::model::Key;
 use crate::storage::database::{Database, Query, Row};
 use crate::storage::ir::{FilterCond, Op, SrvFilter};
-use crate::tables::{TABLE_APPS, TABLE_AUDIT};
+use crate::tables::TABLE_AUDIT;
 use serde_json::Value as Json;
 
-pub fn audit_toggle(db: &mut dyn Database, board_id: &str, enabled: bool) -> anyhow::Result<()> {
-    let mut board = crate::crud::load_board(db, board_id)?;
+pub async fn audit_toggle(db: &mut dyn Database, enabled: bool) -> anyhow::Result<()> {
+    let mut board = crate::crud::tenant_config(db).await?;
     board.audit = enabled;
-    db.update(TABLE_APPS, &Key::text(board_id), &serde_json::to_value(&board)?)?;
-    Ok(())
+    crate::crud::save_tenant(db, &board).await
 }
 
-pub fn audit_list(
+pub async fn audit_list(
     db: &dyn Database,
-    board_id: &str,
     since: Option<&str>,
     limit: usize,
 ) -> anyhow::Result<Vec<Json>> {
-    let mut conds = vec![FilterCond {
-        field: "$.board_id".to_string(),
-        op: Op::Eq,
-        value: Json::String(board_id.to_string()),
-    }];
+    let mut conds = Vec::new();
     if let Some(s) = since {
         if !s.is_empty() {
             conds.push(FilterCond { field: "$.ts".to_string(), op: Op::Gte, value: Json::String(s.to_string()) });
@@ -36,35 +30,29 @@ pub fn audit_list(
         ttl: None,
     };
     let mut out = Vec::new();
-    for row in db.query(TABLE_AUDIT, &q)?.rows {
+    for row in db.query(TABLE_AUDIT, &q).await?.rows {
         out.push(row.data);
     }
     Ok(out)
 }
 
-pub fn append(
+pub async fn append(
     db: &mut dyn Database,
-    board_id: &str,
     event: &str,
     actor: Option<&str>,
     writer: Option<&str>,
     payload_hash: Option<&str>,
 ) -> anyhow::Result<()> {
-    let enabled = match crate::crud::app_by_id(db, board_id)? {
-        Some(b) => b.audit,
-        None => return Ok(()),
-    };
-    if !enabled {
+    if !crate::crud::tenant_config(db).await?.audit {
         return Ok(());
     }
     let row = serde_json::json!({
-        "board_id": board_id,
         "event": event,
         "actor": actor,
         "writer": writer,
         "payload_hash": payload_hash,
         "ts": crate::crud::now_str(),
     });
-    db.insert(TABLE_AUDIT, Row::new(Key::text(board_id), row))?;
+    db.insert(TABLE_AUDIT, Row::new(Key::text(crate::TENANT), row)).await?;
     Ok(())
 }

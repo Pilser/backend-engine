@@ -1,5 +1,5 @@
+pub mod cli;
 pub mod tools;
-pub mod transport;
 
 use engine::registry::{ArgType, CommandSpec};
 use engine::ServerlessEngine;
@@ -44,40 +44,73 @@ impl McpServer {
         self.specs.iter().find(|s| s.name() == name)
     }
 
+    /// The ONLY served tool: one CLI door into the whole backend. (The
+    /// per-verb tools still work via direct `tools/call`, but are not
+    /// advertised — one definition keeps agent context lean.)
     pub fn tools_list(&self) -> Json {
-        let tools: Vec<Json> = self.specs.iter().map(schema_for).collect();
-        json!({ "tools": tools })
+        json!({ "tools": [schema_for_cli()] })
     }
 
-    pub fn call(&self, name: &str, arguments: &Json) -> Result<Json, String> {
-        if name == "apps.resources" {
+    fn owner_principal(&self, arguments: &Json) -> engine::model::Principal {
+        let owner =
+            arguments.get("owner").and_then(|o| o.as_str()).unwrap_or("mcp");
+        engine::model::Principal {
+            id: owner.to_string(),
+            role: "owner".to_string(),
+            scope: None,
+            writer: None,
+        }
+    }
+
+    pub async fn call(&self, name: &str, arguments: &Json) -> Result<Json, String> {
+        if name == cli::TOOL_NAME {
+            let command = arguments
+                .get("command")
+                .and_then(|c| c.as_str())
+                .ok_or_else(|| "missing argument 'command' (a string like \"records list notes\")".to_string())?;
+            let principal = self.owner_principal(arguments);
+            let mut engine =
+                self.engine.lock().map_err(|_| "engine lock poisoned".to_string())?;
+            return match cli::execute(&mut engine, &principal, command).await {
+                Ok(cli::Outcome::Value(value)) => crate::tools::ok(value),
+                Ok(cli::Outcome::Help(text)) => Ok(json!({ "status": "help", "text": text })),
+                Err(error) => Err(error),
+            };
+        }
+        if name == "tenant.resources" {
             if let Some(reporter) = &self.reporter {
-                let board = arguments
-                    .get("board")
-                    .and_then(|b| b.as_str())
-                    .ok_or_else(|| "missing argument board".to_string())?;
-                return crate::tools::ok(reporter(board));
+                // Single tenant: the reporter always observes TENANT.
+                let _ = arguments;
+                return crate::tools::ok(reporter(engine::TENANT));
             }
         }
         let spec = self
             .spec(name)
             .ok_or_else(|| format!("unknown tool '{name}'"))?;
-        let owner = arguments
-            .get("owner")
-            .and_then(|o| o.as_str())
-            .unwrap_or("mcp");
-        let principal = engine::model::Principal {
-            id: owner.to_string(),
-            role: "owner".to_string(),
-            scope: None,
-            writer: None,
-        };
+        let principal = self.owner_principal(arguments);
         let mut engine = self
             .engine
             .lock()
             .map_err(|_| "engine lock poisoned".to_string())?;
-        tools::run(&mut engine, &principal, spec, arguments)
+        tools::run(&mut engine, &principal, spec, arguments).await
     }
+}
+
+/// The single served tool definition. Everything else an agent needs to
+/// know (groups, verbs, flags, examples) is discoverable at runtime via
+/// `command: "--help"`, so this schema stays tiny on purpose.
+pub fn schema_for_cli() -> Json {
+    json!({
+        "name": cli::TOOL_NAME,
+        "description": "Run the whole single-tenant backend with one CLI-style command string. Grammar: [serverless] <group> <verb> [args] [--flag value] [--flag=value] [--bool-flag]. A trailing quoted JSON feeds body verbs (records submit/bulk/update/patch, files put). Start with command \"--help\", then \"<group> --help\", then \"<group> <verb> --help\". Terminal without MCP? Same commands work at GET /mcp?command=<...> or POST /mcp {\"command\":\"...\"}.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "command": { "type": "string", "description": "CLI command, e.g. \"records submit notes '{\\\"body\\\":\\\"hi\\\"}'\" or \"--help\"" },
+            },
+            "required": ["command"],
+        },
+    })
 }
 
 pub fn schema_for(spec: &CommandSpec) -> Json {
@@ -132,7 +165,7 @@ fn json_types(t: &ArgType) -> Json {
     }
 }
 
-pub fn handle_jsonrpc(mcp: &McpServer, body: &str) -> String {
+pub async fn handle_jsonrpc(mcp: &McpServer, body: &str) -> String {
     let req: Json = match serde_json::from_str(body) {
         Ok(v) => v,
         Err(_) => return json!({"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"parse error"}}).to_string(),
@@ -164,7 +197,7 @@ pub fn handle_jsonrpc(mcp: &McpServer, body: &str) -> String {
                 .unwrap_or("")
                 .to_string();
             let arguments = params.get("arguments").cloned().unwrap_or(Json::Null);
-            match mcp.call(&name, &arguments) {
+            match mcp.call(&name, &arguments).await {
                 Ok(result) => json!({
                     "jsonrpc": "2.0", "id": id,
                     "result": { "content": [ { "type": "text", "text": result.to_string() } ] }

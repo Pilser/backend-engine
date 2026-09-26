@@ -1,7 +1,7 @@
 use crate::model::{Hook, Key};
 use crate::storage::database::{Database, Query, Row};
 use crate::storage::ir::{FilterCond, Op, SrvFilter};
-use crate::tables::{scoped_key, TABLE_APPS, TABLE_HOOK_DELIVERIES, TABLE_HOOKS};
+use crate::tables::{tenant_key, TABLE_HOOK_DELIVERIES, TABLE_HOOKS};
 use base64::Engine;
 use serde_json::Value as Json;
 use sha2::{Digest, Sha256};
@@ -91,25 +91,18 @@ pub fn hmac_hex(message: &str, secret: &str) -> String {
     hex(&hmac_sha256(message.as_bytes(), secret.as_bytes()))
 }
 
-pub fn webhook_secret_set(
+pub async fn webhook_secret_set(
     db: &mut dyn Database,
-    board_id: &str,
     secret: Option<&str>,
 ) -> anyhow::Result<()> {
-    let mut board = crate::crud::load_board(db, board_id)?;
+    let mut board = crate::crud::tenant_config(db).await?;
     board.webhook_secret = secret.map(String::from);
-    db.update(TABLE_APPS, &Key::text(board_id), &serde_json::to_value(&board)?)?;
-    Ok(())
+    crate::crud::save_tenant(db, &board).await
 }
 
-fn hook_filter(board_id: &str, url: &str) -> SrvFilter {
+fn hook_filter(url: &str) -> SrvFilter {
     SrvFilter {
         conds: vec![
-            FilterCond {
-                field: "$.board_id".to_string(),
-                op: Op::Eq,
-                value: Json::String(board_id.to_string()),
-            },
             FilterCond {
                 field: "$.url".to_string(),
                 op: Op::Eq,
@@ -119,9 +112,8 @@ fn hook_filter(board_id: &str, url: &str) -> SrvFilter {
     }
 }
 
-pub fn hook_register(
+pub async fn hook_register(
     db: &mut dyn Database,
-    board_id: &str,
     url: &str,
     secret: Option<&str>,
 ) -> anyhow::Result<()> {
@@ -130,21 +122,16 @@ pub fn hook_register(
     }
     let hook = Hook { url: url.to_string(), secret: secret.map(String::from) };
     let mut data = serde_json::to_value(&hook)?;
-    data["board_id"] = Json::String(board_id.to_string());
     data["created_at"] = Json::String(crate::crud::now_str());
-    db.delete(TABLE_HOOKS, &hook_filter(board_id, url))?;
-    db.insert(TABLE_HOOKS, Row::new(Key::text(scoped_key(board_id, url)), data))?;
+    db.delete(TABLE_HOOKS, &hook_filter(url)).await?;
+    db.insert(TABLE_HOOKS, Row::new(Key::text(tenant_key(url)), data)).await?;
     Ok(())
 }
 
-pub fn hook_list(db: &dyn Database, board_id: &str) -> anyhow::Result<Vec<Hook>> {
+pub async fn hook_list(db: &dyn Database) -> anyhow::Result<Vec<Hook>> {
     let q = Query {
         filter: SrvFilter {
-            conds: vec![FilterCond {
-                field: "$.board_id".to_string(),
-                op: Op::Eq,
-                value: Json::String(board_id.to_string()),
-            }],
+            conds: Vec::new(),
         },
         orders: vec![("$.created_at".to_string(), false)],
         limit: usize::MAX,
@@ -152,22 +139,21 @@ pub fn hook_list(db: &dyn Database, board_id: &str) -> anyhow::Result<Vec<Hook>>
         ttl: None,
     };
     let mut out = Vec::new();
-    for row in db.query(TABLE_HOOKS, &q)?.rows {
+    for row in db.query(TABLE_HOOKS, &q).await?.rows {
         out.push(serde_json::from_value(row.data)?);
     }
     Ok(out)
 }
 
-pub fn hook_remove(db: &mut dyn Database, board_id: &str, url: &str) -> anyhow::Result<()> {
-    if db.delete(TABLE_HOOKS, &hook_filter(board_id, url))? == 0 {
-        anyhow::bail!("hook not found on board {board_id}");
+pub async fn hook_remove(db: &mut dyn Database, url: &str) -> anyhow::Result<()> {
+    if db.delete(TABLE_HOOKS, &hook_filter(url)).await? == 0 {
+        anyhow::bail!("hook not found");
     }
     Ok(())
 }
 
-pub fn enqueue_delivery(
+pub async fn enqueue_delivery(
     db: &mut dyn Database,
-    board_id: &str,
     url: &str,
     payload: &Json,
 ) -> anyhow::Result<()> {
@@ -175,7 +161,6 @@ pub fn enqueue_delivery(
     let now = crate::crud::now_str();
     let delivery = serde_json::json!({
         "id": id,
-        "board_id": board_id,
         "url": url,
         "payload": payload,
         "attempts": 0,
@@ -183,22 +168,21 @@ pub fn enqueue_delivery(
         "next_attempt": now,
         "created_at": now,
     });
-    db.insert(TABLE_HOOK_DELIVERIES, Row::new(Key::text(&id), delivery))?;
+    db.insert(TABLE_HOOK_DELIVERIES, Row::new(Key::text(&id), delivery)).await?;
     Ok(())
 }
 
-pub fn fire_hooks(
+pub async fn fire_hooks(
     db: &mut dyn Database,
-    board_id: &str,
     payload: &Json,
 ) -> anyhow::Result<()> {
-    for hook in hook_list(db, board_id)? {
-        enqueue_delivery(db, board_id, &hook.url, payload)?;
+    for hook in hook_list(db).await? {
+        enqueue_delivery(db, &hook.url, payload).await?;
     }
     Ok(())
 }
 
-pub fn hook_deliveries_due(
+pub async fn hook_deliveries_due(
     db: &dyn Database,
     now_iso: &str,
     limit: usize,
@@ -217,7 +201,7 @@ pub fn hook_deliveries_due(
         ttl: None,
     };
     let mut out = Vec::new();
-    for row in db.query(TABLE_HOOK_DELIVERIES, &q)?.rows {
+    for row in db.query(TABLE_HOOK_DELIVERIES, &q).await?.rows {
         if out.len() >= limit {
             break;
         }
@@ -232,7 +216,7 @@ pub fn hook_deliveries_due(
     Ok(out)
 }
 
-pub fn hook_mark_delivery(
+pub async fn hook_mark_delivery(
     db: &mut dyn Database,
     id: &str,
     attempts: i64,
@@ -241,7 +225,7 @@ pub fn hook_mark_delivery(
     delivered_at: Option<&str>,
 ) -> anyhow::Result<()> {
     let key = Key::text(id.to_string());
-    let Some(row) = db.get(TABLE_HOOK_DELIVERIES, &key)? else {
+    let Some(row) = db.get(TABLE_HOOK_DELIVERIES, &key).await? else {
         return Ok(());
     };
     let mut data = row.data;
@@ -264,6 +248,6 @@ pub fn hook_mark_delivery(
             data.as_object_mut().map(|m| m.remove("delivered_at"));
         }
     }
-    db.update(TABLE_HOOK_DELIVERIES, &key, &data)?;
+    db.update(TABLE_HOOK_DELIVERIES, &key, &data).await?;
     Ok(())
 }

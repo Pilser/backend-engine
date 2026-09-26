@@ -1,0 +1,38 @@
+# NOTE: the package cannot be named `worker` — that is the Cloudflare SDK
+# crate, and `use worker::…` inside our own crate would self-resolve.
+# worker-build emits build/<package-name>/shim.mjs (see wrangler.toml).
+[package]
+name = "serverless-worker"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# Host API only. engine/mcp stay dependency-clean (CI wasm gate enforces it);
+# tokio in this graph is worker's own wasm-shimmed copy, not a server runtime.
+worker = { version = "0.8", features = ["d1", "queue"] }
+# Required directly: worker-macros' durable_object expansion references the
+# `wasm_bindgen` crate by bare path (codegen only, no runtime impact).
+wasm-bindgen = "0.2"
+async-trait = { workspace = true }
+sha2 = { workspace = true }
+anyhow = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+# WS bridge + SSE streaming primitives (all wasm-safe, none on the ban list).
+futures-util = "0.3"
+async-stream = "0.3"
+# tokio io-util ONLY (AsyncRead/Write traits + split for the WS bridge).
+# No runtime/timers/net — those cannot work on isolates.
+tokio = { version = "1", default-features = false, features = ["io-util"] }
+
+# uuid v4 needs an OS RNG; wasm32 has none — same JS bridge as engine.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.4", features = ["wasm_js"] }
+engine = { path = "../engine" }
+mcp = { path = "../mcp" }
+serde = { workspace = true }
+serde_json = { workspace = true }

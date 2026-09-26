@@ -1,19 +1,19 @@
 use crate::model::{Key, TableConfig};
 use crate::storage::database::Database;
 use crate::storage::ir::{normalize_path, scalar_text};
-use crate::tables::{scoped_key, TABLE_TABLES};
+use crate::tables::{tenant_key, TABLE_TABLES};
 use serde_json::Value as Json;
 
-pub fn prepare_payload(_db: &dyn Database, board: &TableConfig, payload: Json) -> anyhow::Result<Json> {
+pub fn prepare_payload(_db: &dyn Database, cfg: &TableConfig, payload: Json) -> anyhow::Result<Json> {
     let mut prepared = payload;
-    apply_computed(board, &mut prepared)?;
-    validate_rules(board, &prepared)?;
-    validate_schema(board, &prepared)?;
+    apply_computed(cfg, &mut prepared)?;
+    validate_rules(cfg, &prepared)?;
+    validate_schema(cfg, &prepared)?;
     Ok(prepared)
 }
 
-pub fn apply_computed(board: &TableConfig, payload: &mut Json) -> anyhow::Result<()> {
-    let Some(computed) = board.computed_json.as_ref() else {
+pub fn apply_computed(cfg: &TableConfig, payload: &mut Json) -> anyhow::Result<()> {
+    let Some(computed) = cfg.computed_json.as_ref() else {
         return Ok(());
     };
     let map = computed
@@ -38,8 +38,8 @@ pub fn apply_computed(board: &TableConfig, payload: &mut Json) -> anyhow::Result
     Ok(())
 }
 
-pub fn validate_rules(board: &TableConfig, payload: &Json) -> anyhow::Result<()> {
-    let Some(rules) = board.validate_json.as_ref() else {
+pub fn validate_rules(cfg: &TableConfig, payload: &Json) -> anyhow::Result<()> {
+    let Some(rules) = cfg.validate_json.as_ref() else {
         return Ok(());
     };
     let arr = rules
@@ -64,22 +64,120 @@ pub fn validate_rules(board: &TableConfig, payload: &Json) -> anyhow::Result<()>
     Ok(())
 }
 
-pub fn validate_schema(board: &TableConfig, payload: &Json) -> anyhow::Result<()> {
-    let Some(schema) = board.schema_json.as_ref() else {
+/// Lightweight JSON-Schema validator (allowlist subset, Draft 2020-12 shape).
+///
+/// The full `jsonschema` crate was removed: it is the biggest wasm binary-size
+/// and CPU risk on the edge hot path, and single-tenant means the operator
+/// controls all writers. Supported keywords (everything else is ignored):
+/// `type` (string or array), `required`, `properties` (recursive),
+/// `items` (single schema, applied to every element), `enum`,
+/// `minimum`/`maximum` (numbers), `minLength`/`maxLength` (strings).
+pub fn validate_schema(cfg: &TableConfig, payload: &Json) -> anyhow::Result<()> {
+    let Some(schema) = cfg.schema_json.as_ref() else {
         return Ok(());
     };
-    let compiled = jsonschema::options_for::<jsonschema::json::SerdeJson>()
-        .should_validate_formats(true)
-        .build(schema)
-        .map_err(|e| anyhow::anyhow!("board {} has an invalid schema_json: {e}", board.board_id))?;
-    match compiled.validate(payload) {
-        Ok(()) => Ok(()),
-        Err(e) => anyhow::bail!("payload failed schema: {e}"),
+    let Some(obj) = schema.as_object() else {
+        anyhow::bail!("table '{}' has an invalid schema_json: schema must be an object", cfg.table);
+    };
+    check_node(obj, payload, "$").map_err(|e| anyhow::anyhow!("payload failed schema: {e}"))
+}
+
+fn check_node(schema: &serde_json::Map<String, Json>, value: &Json, path: &str) -> anyhow::Result<()> {
+    if let Some(t) = schema.get("type") {
+        let types: Vec<&str> = match t {
+            Json::String(s) => vec![s.as_str()],
+            Json::Array(arr) => arr.iter().filter_map(|v| v.as_str()).collect(),
+            _ => vec![],
+        };
+        if !types.is_empty() && !types.iter().any(|t| type_matches(t, value)) {
+            anyhow::bail!("{path}: expected type {} but found {}", types.join("|"), json_type(value));
+        }
+    }
+    if let Some(Json::Array(items)) = schema.get("enum") {
+        if !items.iter().any(|allowed| allowed == value) {
+            anyhow::bail!("{path}: value is not one of the allowed enum values");
+        }
+    }
+    match value {
+        Json::Object(map) => {
+            if let Some(Json::Array(required)) = schema.get("required") {
+                for field in required.iter().filter_map(|f| f.as_str()) {
+                    if !map.contains_key(field) {
+                        anyhow::bail!("{path}: missing required field '{field}'");
+                    }
+                }
+            }
+            if let Some(Json::Object(props)) = schema.get("properties") {
+                for (field, subschema) in props {
+                    if let (Some(sub), Some(v)) = (subschema.as_object(), map.get(field)) {
+                        check_node(sub, v, &format!("{path}.{field}"))?;
+                    }
+                }
+            }
+        }
+        Json::Array(arr) => {
+            if let Some(sub) = schema.get("items").and_then(|i| i.as_object()) {
+                for (i, v) in arr.iter().enumerate() {
+                    check_node(sub, v, &format!("{path}[{i}]"))?;
+                }
+            }
+        }
+        Json::String(s) => {
+            if let Some(min) = schema.get("minLength").and_then(|v| v.as_u64()) {
+                if (s.chars().count() as u64) < min {
+                    anyhow::bail!("{path}: string shorter than minLength {min}");
+                }
+            }
+            if let Some(max) = schema.get("maxLength").and_then(|v| v.as_u64()) {
+                if (s.chars().count() as u64) > max {
+                    anyhow::bail!("{path}: string longer than maxLength {max}");
+                }
+            }
+        }
+        Json::Number(n) => {
+            let f = n.as_f64().unwrap_or(f64::NAN);
+            if let Some(min) = schema.get("minimum").and_then(|v| v.as_f64()) {
+                if f < min {
+                    anyhow::bail!("{path}: {f} is less than minimum {min}");
+                }
+            }
+            if let Some(max) = schema.get("maximum").and_then(|v| v.as_f64()) {
+                if f > max {
+                    anyhow::bail!("{path}: {f} is greater than maximum {max}");
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn type_matches(t: &str, value: &Json) -> bool {
+    match t {
+        "object" => value.is_object(),
+        "array" => value.is_array(),
+        "string" => value.is_string(),
+        "number" => value.is_number(),
+        "integer" => value.as_i64().is_some() || value.as_u64().is_some(),
+        "boolean" => value.is_boolean(),
+        "null" => value.is_null(),
+        _ => true,
     }
 }
 
-pub fn apply_redact(board: &TableConfig, payload: &Json) -> Json {
-    let Some(redact) = board.redact_json.as_ref() else {
+fn json_type(value: &Json) -> &'static str {
+    match value {
+        Json::Null => "null",
+        Json::Bool(_) => "boolean",
+        Json::Number(_) => "number",
+        Json::String(_) => "string",
+        Json::Array(_) => "array",
+        Json::Object(_) => "object",
+    }
+}
+
+pub fn apply_redact(cfg: &TableConfig, payload: &Json) -> Json {
+    let Some(redact) = cfg.redact_json.as_ref() else {
         return payload.clone();
     };
     let Some(paths) = redact.as_array() else {
@@ -103,46 +201,55 @@ pub fn apply_redact(board: &TableConfig, payload: &Json) -> Json {
     out
 }
 
-fn save_table_config(
+async fn save_table_config(
     db: &mut dyn Database,
-    board_id: &str,
     table: &str,
     apply: impl FnOnce(&mut TableConfig),
 ) -> anyhow::Result<()> {
-    let mut cfg = crate::crud::load_table(db, board_id, table)?;
+    let mut cfg = crate::crud::load_table(db, table).await?;
     apply(&mut cfg);
-    db.update(TABLE_TABLES, &Key::text(scoped_key(board_id, table)), &serde_json::to_value(&cfg)?)?;
+    db.update(TABLE_TABLES, &Key::text(tenant_key(table)), &serde_json::to_value(&cfg)?).await?;
     Ok(())
 }
 
-pub fn computed_set(
+/// An explicit JSON null *clears* the knob (stores `None`); without this,
+/// clearing would store `Some(null)` and fail every subsequent write.
+fn opt_json(v: &Json) -> Option<Json> {
+    if v.is_null() {
+        None
+    } else {
+        Some(v.clone())
+    }
+}
+
+pub async fn computed_set(
     db: &mut dyn Database,
-    board_id: &str,
     table: &str,
     map: &Json,
 ) -> anyhow::Result<()> {
-    save_table_config(db, board_id, table, |c| c.computed_json = Some(map.clone()))
+    let map = opt_json(map);
+    save_table_config(db, table, |c| c.computed_json = map).await
 }
 
-pub fn validate_set(
+pub async fn validate_set(
     db: &mut dyn Database,
-    board_id: &str,
     table: &str,
     rules: &Json,
 ) -> anyhow::Result<()> {
-    save_table_config(db, board_id, table, |c| c.validate_json = Some(rules.clone()))
+    let rules = opt_json(rules);
+    save_table_config(db, table, |c| c.validate_json = rules).await
 }
 
-pub fn redact_set(
+pub async fn redact_set(
     db: &mut dyn Database,
-    board_id: &str,
     table: &str,
     paths: &Json,
 ) -> anyhow::Result<()> {
-    save_table_config(db, board_id, table, |c| c.redact_json = Some(paths.clone()))
+    let paths = opt_json(paths);
+    save_table_config(db, table, |c| c.redact_json = paths).await
 }
 
-pub fn check_unique(
+pub async fn check_unique(
     db: &dyn Database,
     table_cfg: &TableConfig,
     payload: &Json,
@@ -159,12 +266,11 @@ pub fn check_unique(
     let text = scalar_text(&value);
     if let Some(existing) = crate::crud::find_unique_holder(
         db,
-        &table_cfg.board_id,
         &table_cfg.table,
         &path,
         &text,
         exclude_seq,
-    )? {
+    ).await? {
         anyhow::bail!(
             "duplicate value '{text}' for unique field {key} (already record seq {existing})"
         );

@@ -2,9 +2,10 @@ use crate::events::EventKind;
 use crate::model::{Key, Principal, Recipe};
 use crate::storage::database::{Database, Query, Row};
 use crate::storage::ir::{normalize_path, scalar_text, FilterCond, Op, SrvFilter};
-use crate::tables::{scoped_key, TABLE_RECIPES, TABLE_RECIPE_RUNS};
+use crate::tables::{tenant_key, TABLE_RECIPES, TABLE_RECIPE_RUNS};
 use serde_json::{json, Value as Json};
 use sha2::{Digest, Sha256};
+use std::future::Future;
 
 pub use crate::webhooks::valid_url;
 
@@ -21,13 +22,12 @@ fn sha256_hex(s: &str) -> String {
     out
 }
 
-fn recipe_run_key(board_id: &str, recipe: &str, key: &str) -> Key {
-    Key::text(scoped_key(board_id, &format!("{recipe}#{key}")))
+fn recipe_run_key(recipe: &str, key: &str) -> Key {
+    Key::text(tenant_key(&format!("{recipe}#{key}")))
 }
 
-fn recipe_dedup_skip(
+async fn recipe_dedup_skip(
     db: &dyn Database,
-    board_id: &str,
     recipe: &Recipe,
     payload: &Json,
 ) -> anyhow::Result<bool> {
@@ -39,12 +39,11 @@ fn recipe_dedup_skip(
         return Ok(false);
     }
     let key = sha256_hex(&serde_json::to_string(&k).unwrap_or_default());
-    Ok(db.get(TABLE_RECIPE_RUNS, &recipe_run_key(board_id, &recipe.name, &key))?.is_some())
+    Ok(db.get(TABLE_RECIPE_RUNS, &recipe_run_key(&recipe.name, &key)).await?.is_some())
 }
 
-fn recipe_dedup_mark(
+async fn recipe_dedup_mark(
     db: &mut dyn Database,
-    board_id: &str,
     recipe: &Recipe,
     payload: &Json,
 ) -> anyhow::Result<()> {
@@ -57,11 +56,10 @@ fn recipe_dedup_mark(
     }
     let key = sha256_hex(&serde_json::to_string(&k).unwrap_or_default());
     let data = serde_json::json!({
-        "board_id": board_id,
         "recipe": recipe.name,
         "dedup_key": key,
     });
-    db.insert(TABLE_RECIPE_RUNS, Row::new(recipe_run_key(board_id, &recipe.name, &key), data))?;
+    db.insert(TABLE_RECIPE_RUNS, Row::new(recipe_run_key(&recipe.name, &key), data)).await?;
     Ok(())
 }
 
@@ -86,10 +84,10 @@ pub struct PendingHttp {
 
 /// Execute deferred `$call` plans. MUST run WITHOUT the engine Mutex held —
 /// this is pure network I/O plus a write-back into the working payload.
-pub fn execute_pending(calls: Vec<PendingHttp>, payload: &mut Json, logs: &mut Vec<String>) {
+pub async fn execute_pending(calls: Vec<PendingHttp>, payload: &mut Json, logs: &mut Vec<String>) {
     for c in calls {
         let url = c.url.clone();
-        match crate::http::http_call_body(&c.url, &c.headers, &c.body, c.timeout_ms) {
+        match crate::http::http_call_body(&c.url, &c.headers, &c.body, c.timeout_ms).await {
             Ok((status, resp_body)) => {
                 let _ = set_at(payload, "$.call_result", json!({ "status": status, "body": resp_body }));
                 logs.push(format!("call {url} -> {status}"));
@@ -100,14 +98,9 @@ pub fn execute_pending(calls: Vec<PendingHttp>, payload: &mut Json, logs: &mut V
 }
 
 
-fn board_cond(board_id: &str) -> FilterCond {
-    FilterCond { field: "$.board_id".to_string(), op: Op::Eq, value: Json::String(board_id.to_string()) }
-}
-
-fn recipe_filter(board_id: &str, name: &str) -> SrvFilter {
+fn recipe_filter(name: &str) -> SrvFilter {
     SrvFilter {
         conds: vec![
-            board_cond(board_id),
             FilterCond { field: "$.name".to_string(), op: Op::Eq, value: Json::String(name.to_string()) },
         ],
     }
@@ -125,7 +118,7 @@ fn when_trigger_valid(when: &Json) -> bool {
     ) || s.map(|v| v.starts_with("cron:")).unwrap_or(false)
 }
 
-pub fn recipe_add(db: &mut dyn Database, board_id: &str, recipe: &Recipe) -> anyhow::Result<()> {
+pub async fn recipe_add(db: &mut dyn Database, recipe: &Recipe) -> anyhow::Result<()> {
     if !when_trigger_valid(&recipe.when_json) {
         anyhow::bail!(
             "recipe when must be one of: record.created, record.updated, record.deleted, inbound, cron:<name>"
@@ -135,16 +128,15 @@ pub fn recipe_add(db: &mut dyn Database, board_id: &str, recipe: &Recipe) -> any
         Some(a) if !a.is_empty() => {}
         _ => anyhow::bail!("recipe needs at least one action"),
     }
-    let mut data = serde_json::to_value(recipe)?;
-    data["board_id"] = Json::String(board_id.to_string());
-    db.delete(TABLE_RECIPES, &recipe_filter(board_id, &recipe.name))?;
-    db.insert(TABLE_RECIPES, Row::new(Key::text(scoped_key(board_id, &recipe.name)), data))?;
+    let data = serde_json::to_value(recipe)?;
+    db.delete(TABLE_RECIPES, &recipe_filter(&recipe.name)).await?;
+    db.insert(TABLE_RECIPES, Row::new(Key::text(tenant_key(&recipe.name)), data)).await?;
     Ok(())
 }
 
-pub fn recipe_list(db: &dyn Database, board_id: &str) -> anyhow::Result<Vec<Recipe>> {
+pub async fn recipe_list(db: &dyn Database) -> anyhow::Result<Vec<Recipe>> {
     let q = Query {
-        filter: SrvFilter { conds: vec![board_cond(board_id)] },
+        filter: SrvFilter { conds: Vec::new() },
         orders: vec![("$.name".to_string(), false)],
         limit: usize::MAX,
         offset: 0,
@@ -152,37 +144,36 @@ pub fn recipe_list(db: &dyn Database, board_id: &str) -> anyhow::Result<Vec<Reci
         ttl: None,
     };
     let mut out = Vec::new();
-    for row in db.query(TABLE_RECIPES, &q)?.rows {
+    for row in db.query(TABLE_RECIPES, &q).await?.rows {
         out.push(serde_json::from_value(row.data)?);
     }
     Ok(out)
 }
 
-pub fn recipe_get(db: &dyn Database, board_id: &str, name: &str) -> anyhow::Result<Option<Recipe>> {
-    let key = Key::text(scoped_key(board_id, name));
-    let Some(row) = db.get(TABLE_RECIPES, &key)? else {
+pub async fn recipe_get(db: &dyn Database, name: &str) -> anyhow::Result<Option<Recipe>> {
+    let key = Key::text(tenant_key(name));
+    let Some(row) = db.get(TABLE_RECIPES, &key).await? else {
         return Ok(None);
     };
     Ok(serde_json::from_value(row.data)?)
 }
 
-pub fn recipe_remove(db: &mut dyn Database, board_id: &str, name: &str) -> anyhow::Result<()> {
-    if db.delete(TABLE_RECIPES, &recipe_filter(board_id, name))? == 0 {
-        anyhow::bail!("recipe '{name}' not found on board {board_id}");
+pub async fn recipe_remove(db: &mut dyn Database, name: &str) -> anyhow::Result<()> {
+    if db.delete(TABLE_RECIPES, &recipe_filter(name)).await? == 0 {
+        anyhow::bail!("recipe '{name}' not found");
     }
     Ok(())
 }
 
-pub fn recipe_enabled(db: &mut dyn Database, board_id: &str, name: &str, enabled: bool) -> anyhow::Result<()> {
-    let key = Key::text(scoped_key(board_id, name));
-    let Some(row) = db.get(TABLE_RECIPES, &key)? else {
-        anyhow::bail!("recipe '{name}' not found on board {board_id}");
+pub async fn recipe_enabled(db: &mut dyn Database, name: &str, enabled: bool) -> anyhow::Result<()> {
+    let key = Key::text(tenant_key(name));
+    let Some(row) = db.get(TABLE_RECIPES, &key).await? else {
+        anyhow::bail!("recipe '{name}' not found");
     };
     let mut recipe: Recipe = serde_json::from_value(row.data)?;
     recipe.enabled = enabled;
-    let mut data = serde_json::to_value(&recipe)?;
-    data["board_id"] = Json::String(board_id.to_string());
-    db.update(TABLE_RECIPES, &key, &data)?;
+    let data = serde_json::to_value(&recipe)?;
+    db.update(TABLE_RECIPES, &key, &data).await?;
     Ok(())
 }
 
@@ -195,23 +186,47 @@ pub struct DispatchOutcome {
     pub writebacks: Vec<(i64, Json)>,
 }
 
-pub fn dispatch(
+/// Boxed dispatch entry points: recipes can write records (`$upsert_other`,
+/// `$patch_other`, `$transaction`, write-backs), and record writes dispatch
+/// recipes — a genuine call cycle. Native `async fn` cannot express cyclic
+/// futures (infinite type), so these four entry points return a boxed future
+/// while their bodies live in `*_inner` async fns. Callers just `.await`.
+pub fn dispatch<'a>(
+    db: &'a mut dyn Database,
+    table: &'a str,
+    event: EventKind,
+    seq: Option<i64>,
+    payload: Option<Json>,
+) -> std::pin::Pin<Box<dyn Future<Output = anyhow::Result<()>> + 'a>> {
+    Box::pin(dispatch_inner(db, table, event, seq, payload))
+}
+
+async fn dispatch_inner(
     db: &mut dyn Database,
-    board_id: &str,
     table: &str,
     event: EventKind,
     seq: Option<i64>,
     payload: Option<Json>,
 ) -> anyhow::Result<()> {
     let mut out = DispatchOutcome { pending: Vec::new(), writebacks: Vec::new() };
-    dispatch_phased(db, board_id, table, event, seq, payload, &mut out)
+    dispatch_phased(db, table, event, seq, payload, &mut out).await
 }
 
 /// Phase A only: recipe matching + DB actions + plan collection. NO network
 /// I/O. The caller may hold the engine Mutex safely.
-pub fn dispatch_phased(
+pub fn dispatch_phased<'a>(
+    db: &'a mut dyn Database,
+    table: &'a str,
+    event: EventKind,
+    seq: Option<i64>,
+    payload: Option<Json>,
+    out: &'a mut DispatchOutcome,
+) -> std::pin::Pin<Box<dyn Future<Output = anyhow::Result<()>> + 'a>> {
+    Box::pin(dispatch_phased_inner(db, table, event, seq, payload, out))
+}
+
+async fn dispatch_phased_inner(
     db: &mut dyn Database,
-    board_id: &str,
     table: &str,
     event: EventKind,
     seq: Option<i64>,
@@ -219,7 +234,7 @@ pub fn dispatch_phased(
     out: &mut DispatchOutcome,
 ) -> anyhow::Result<()> {
     let payload = payload.unwrap_or(Json::Null);
-    for recipe in recipe_list(db, board_id)? {
+    for recipe in recipe_list(db).await? {
         if let Some(rt) = recipe.table.as_deref() {
             if rt != table {
                 continue;
@@ -233,7 +248,7 @@ pub fn dispatch_phased(
                 continue;
             }
         }
-        if recipe_dedup_skip(db, board_id, &recipe, &payload)? {
+        if recipe_dedup_skip(db, &recipe, &payload).await? {
             continue;
         }
         let mut working = payload.clone();
@@ -241,7 +256,7 @@ pub fn dispatch_phased(
         let mut pending: Vec<PendingHttp> = Vec::new();
         {
             let mut mode = HttpMode::Defer(&mut pending);
-            let _ = run_actions(db, board_id, table, &recipe, &mut working, &mut logs, &mut mode);
+            let _ = run_actions(db, table, &recipe, &mut working, &mut logs, &mut mode).await;
         }
         // Execute inline ONLY when there is nothing deferred (pure-DB recipes
         // finish here). Otherwise hand the calls to the caller's phase B.
@@ -253,12 +268,12 @@ pub fn dispatch_phased(
             out.pending.extend(pending);
             logs.push(format!("deferred {} http call(s)", out.pending.len()));
         }
-        let _ = recipe_dedup_mark(&mut *db, board_id, &recipe, &payload);
+        let _ = recipe_dedup_mark(&mut *db, &recipe, &payload).await;
         if working != payload && seq.is_some() && matches!(event, EventKind::Created | EventKind::Updated) {
             // Write-back of non-deferred results happens NOW (still Phase A).
             // Deferred-call results are written back by the caller after
             // executing them (see apply_call_results).
-            if let Err(e) = crate::crud::record_set_raw(&mut *db, board_id, table, seq.unwrap(), working.clone()) {
+            if let Err(e) = crate::crud::record_set_raw(&mut *db, table, seq.unwrap(), working.clone()).await {
                 eprintln!("[recipe {}] write-back failed: {e}", recipe.name);
             }
             if !out.pending.is_empty() {
@@ -271,32 +286,37 @@ pub fn dispatch_phased(
 
 /// Phase C: merge executed `$call` results into stored records. Runs WITH the
 /// engine lock re-acquired by the caller.
-pub fn apply_call_results(
+pub async fn apply_call_results(
     db: &mut dyn Database,
-    board_id: &str,
     table: &str,
     writebacks: &[(i64, Json)],
 ) {
     for (seq, working) in writebacks {
-        if let Err(e) = crate::crud::record_set_raw(db, board_id, table, *seq, working.clone()) {
+        if let Err(e) = crate::crud::record_set_raw(db, table, *seq, working.clone()).await {
             eprintln!("[recipe] deferred write-back failed: {e}");
         }
         let _ = working;
     }
 }
 
-pub fn dispatch_cron(
+pub fn dispatch_cron<'a>(
+    db: &'a mut dyn Database,
+    job_name: &'a str,
+) -> std::pin::Pin<Box<dyn Future<Output = anyhow::Result<()>> + 'a>> {
+    Box::pin(dispatch_cron_inner(db, job_name))
+}
+
+async fn dispatch_cron_inner(
     db: &mut dyn Database,
-    board_id: &str,
     job_name: &str,
 ) -> anyhow::Result<()> {
     let mut out = DispatchOutcome { pending: Vec::new(), writebacks: Vec::new() };
-    dispatch_cron_phased(db, board_id, job_name, &mut out)?;
+    dispatch_cron_phased(db, job_name, &mut out).await?;
     // Legacy behavior: execute any deferred HTTP before returning (caller
     // holds the lock). Lock-aware callers use the phased variant instead.
     let mut working = Json::Null;
     let mut logs = Vec::new();
-    execute_pending(out.pending, &mut working, &mut logs);
+    execute_pending(out.pending, &mut working, &mut logs).await;
     for l in &logs {
         eprintln!("[recipe cron:{job_name}] {l}");
     }
@@ -305,14 +325,21 @@ pub fn dispatch_cron(
 
 /// Phase A only: cron recipe matching + DB actions; `$call` HTTP collected
 /// into `out.pending` (no network I/O here).
-pub fn dispatch_cron_phased(
+pub fn dispatch_cron_phased<'a>(
+    db: &'a mut dyn Database,
+    job_name: &'a str,
+    out: &'a mut DispatchOutcome,
+) -> std::pin::Pin<Box<dyn Future<Output = anyhow::Result<()>> + 'a>> {
+    Box::pin(dispatch_cron_phased_inner(db, job_name, out))
+}
+
+async fn dispatch_cron_phased_inner(
     db: &mut dyn Database,
-    board_id: &str,
     job_name: &str,
     out: &mut DispatchOutcome,
 ) -> anyhow::Result<()> {
     let wanted = format!("cron:{job_name}");
-    for recipe in recipe_list(db, board_id)? {
+    for recipe in recipe_list(db).await? {
         if !recipe.enabled {
             continue;
         }
@@ -328,7 +355,7 @@ pub fn dispatch_cron_phased(
         if when != wanted {
             continue;
         }
-        if recipe_dedup_skip(db, board_id, &recipe, &Json::Null)? {
+        if recipe_dedup_skip(db, &recipe, &Json::Null).await? {
             continue;
         }
         let mut working = Json::Null;
@@ -337,7 +364,7 @@ pub fn dispatch_cron_phased(
         let mut pending: Vec<PendingHttp> = Vec::new();
         {
             let mut mode = HttpMode::Defer(&mut pending);
-            let _ = run_actions(db, board_id, table, &recipe, &mut working, &mut logs, &mut mode);
+            let _ = run_actions(db, table, &recipe, &mut working, &mut logs, &mut mode).await;
         }
         if pending.is_empty() {
             for l in &logs {
@@ -346,7 +373,7 @@ pub fn dispatch_cron_phased(
         } else {
             out.pending.extend(pending);
         }
-        let _ = recipe_dedup_mark(&mut *db, board_id, &recipe, &Json::Null);
+        let _ = recipe_dedup_mark(&mut *db, &recipe, &Json::Null).await;
     }
     Ok(())
 }
@@ -411,11 +438,11 @@ pub fn template_swap(payload: &Json, value: &str) -> anyhow::Result<String> {
     Ok(out)
 }
 
-pub fn srv_http_call(url: &str, headers: &[(String, String)], body: &Json) -> anyhow::Result<Json> {
+pub async fn srv_http_call(url: &str, headers: &[(String, String)], body: &Json) -> anyhow::Result<Json> {
     if !valid_url(url) {
         anyhow::bail!("ssrf-blocked url '{url}'");
     }
-    let (_, res) = crate::http::http_call(url, headers, body, 15_000)?;
+    let (_, res) = crate::http::http_call(url, headers, body, 15_000).await?;
     Ok(res)
 }
 
@@ -592,9 +619,8 @@ pub fn subst_secret_json(
     }
 }
 
-fn run_actions(
+async fn run_actions(
     db: &mut dyn Database,
-    board_id: &str,
     table: &str,
     recipe: &Recipe,
     payload: &mut Json,
@@ -616,7 +642,7 @@ fn run_actions(
                 continue;
             }
         }
-        match apply_action(db, board_id, table, key, val, payload, logs, http_mode) {
+        match apply_action(db, table, key, val, payload, logs, http_mode).await {
             Ok(()) => n += 1,
             Err(e) => {
                 logs.push(format!("{key}: {e}"));
@@ -631,9 +657,8 @@ fn str_field<'a>(obj: &'a serde_json::Map<String, Json>, name: &str) -> anyhow::
     obj.get(name).and_then(|v| v.as_str()).ok_or_else(|| anyhow::anyhow!("missing string field '{name}'"))
 }
 
-fn apply_action(
+async fn apply_action(
     db: &mut dyn Database,
-    board_id: &str,
     table: &str,
     key: &str,
     val: &Json,
@@ -674,16 +699,15 @@ fn apply_action(
         }
         "$upsert_other" => {
             let obj = val.as_object().ok_or_else(|| anyhow::anyhow!("$upsert_other must be an object"))?;
-            let board = obj.get("board").and_then(|v| v.as_str()).unwrap_or(board_id);
+            // Single tenant: the legacy cross-board `board` field is ignored.
             let tbl = obj.get("table").and_then(|v| v.as_str()).unwrap_or(table);
             let mut p = obj.get("payload").cloned().unwrap_or(Json::Object(serde_json::Map::new()));
             subst_strings(&mut p, payload)?;
-            let principal = Principal { id: board_id.to_string(), role: "owner".to_string(), scope: None, writer: None };
-            crate::crud::record_insert(db, board, tbl, p, Some(&format!("recipe:{board_id}")), true, &principal)?;
+            let principal = Principal { id: crate::TENANT.to_string(), role: "owner".to_string(), scope: None, writer: None };
+            crate::crud::record_insert(db, tbl, p, Some(&format!("recipe:{}", crate::TENANT)), true, &principal).await?;
         }
         "$patch_other" => {
             let obj = val.as_object().ok_or_else(|| anyhow::anyhow!("$patch_other must be an object"))?;
-            let board = obj.get("board").and_then(|v| v.as_str()).unwrap_or(board_id);
             let tbl = obj.get("table").and_then(|v| v.as_str()).unwrap_or(table);
             let filter = obj.get("filter").ok_or_else(|| anyhow::anyhow!("$patch_other needs \"filter\""))?;
             let patch = obj.get("patch").ok_or_else(|| anyhow::anyhow!("$patch_other needs \"patch\""))?;
@@ -693,7 +717,7 @@ fn apply_action(
             // patch {"$inc":{"quantity":"{{$.quantity}}"}}.
             let filter = subst_patch(filter.clone(), payload)?;
             let patch = subst_patch(patch.clone(), payload)?;
-            crate::crud::record_patch_first_raw(db, board, tbl, &crate::storage::ir::parse_filter(&filter)?, &patch)?;
+            crate::crud::record_patch_first_raw(db, tbl, &crate::storage::ir::parse_filter(&filter)?, &patch).await?;
         }
         // "$resolve_other": look up one row in another table by a filter and
         // copy a field of it into the working payload. Used to resolve
@@ -707,7 +731,7 @@ fn apply_action(
             let field = obj.get("field").and_then(|v| v.as_str()).unwrap_or("id");
             let into = obj.get("into").and_then(|v| v.as_str()).unwrap_or("$.resolved_id");
             let filter = subst_patch(filter.clone(), payload)?;
-            let rows = crate::crud::scan_rows(db, board_id, tbl)?;
+            let rows = crate::crud::scan_rows(db, tbl).await?;
             let mut found = None;
             if let Ok(sf) = crate::storage::ir::parse_filter(&filter) {
                 for row in rows {
@@ -736,8 +760,8 @@ fn apply_action(
             let password = subst_strings_str(obj.get("password").and_then(|v| v.as_str()).unwrap_or("MigrationTempPass2026"), payload)?;
             let role = obj.get("role").and_then(|v| v.as_str()).unwrap_or("student");
             let into = obj.get("into").and_then(|v| v.as_str()).unwrap_or("$.created_user_email");
-            let principal = Principal { id: board_id.to_string(), role: "owner".to_string(), scope: None, writer: None };
-            let user = crate::auth::user_signup(db, board_id, &email, &password, None, role, &principal)
+            let principal = Principal { id: crate::TENANT.to_string(), role: "owner".to_string(), scope: None, writer: None };
+            let user = crate::auth::user_signup(db, &email, &password, None, role, &principal).await
                 .map_err(|e| anyhow::anyhow!("$create_user: {e}"))?;
             set_at(payload, into, Json::String(user.email))?;
         }
@@ -745,16 +769,15 @@ fn apply_action(
             let steps = val.as_array().ok_or_else(|| anyhow::anyhow!("$transaction must be an array"))?;
             for step in steps {
                 let map = step.as_object().ok_or_else(|| anyhow::anyhow!("$transaction step must be an object"))?;
-                let board = map.get("board").and_then(|v| v.as_str()).unwrap_or(board_id);
                 let tbl = map.get("table").and_then(|v| v.as_str()).unwrap_or(table);
                 let filter = map.get("filter").ok_or_else(|| anyhow::anyhow!("$transaction step needs \"filter\""))?;
                 let patch = map.get("patch").ok_or_else(|| anyhow::anyhow!("$transaction step needs \"patch\""))?;
-                crate::crud::record_patch_first_raw(db, board, tbl, &crate::storage::ir::parse_filter(filter)?, patch)?;
+                crate::crud::record_patch_first_raw(db, tbl, &crate::storage::ir::parse_filter(filter)?, patch).await?;
             }
         }
         "$call" | "$notify" => {
             let obj = val.as_object().ok_or_else(|| anyhow::anyhow!("{key} must be an object"))?;
-            let secrets = crate::secrets::secrets_map(db, board_id)?;
+            let secrets = crate::secrets::secrets_map(db).await?;
             let url = resolve_secret_placeholders(&secrets, str_field(obj, "url")?);
             if !valid_url(&url) {
                 anyhow::bail!("ssrf-blocked url '{url}'");
@@ -795,11 +818,11 @@ fn apply_action(
             // Phase A ends here: everything above touched the DB (secrets)
             // and the payload. The network call itself either runs inline
             // (legacy, caller holds the engine Mutex) or is deferred to a
-            // lock-free phase via execute_pending().
+            // lock-free phase via execute_pending().await.
             logs.push(format!("call {url}"));
             match http_mode {
                 HttpMode::Inline => {
-                    let (status, resp_body) = crate::http::http_call_body(&url, &headers, &http_body, timeout)?;
+                    let (status, resp_body) = crate::http::http_call_body(&url, &headers, &http_body, timeout).await?;
                     set_at(payload, "$.call_result", json!({ "status": status, "body": resp_body }))?;
                 }
                 HttpMode::Defer(pending) => pending.push(PendingHttp { url, headers, body: http_body, timeout_ms: timeout }),
@@ -910,7 +933,7 @@ fn apply_action(
                 .or_else(|| obj.get("schedule").and_then(|s| s.as_str()))
                 .ok_or_else(|| anyhow::anyhow!("$schedule needs \"at\" (cron or @every)"))?;
             let action = obj.get("action").cloned().unwrap_or(Json::Null);
-            let next = crate::jobs::job_add(db, board_id, name, at, &action)?;
+            let next = crate::jobs::job_add(db, name, at, &action).await?;
             logs.push(format!("scheduled job '{name}' next run {next}"));
         }
         other => anyhow::bail!("unknown action '{other}'"),

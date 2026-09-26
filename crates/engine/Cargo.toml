@@ -8,6 +8,10 @@ rust-version.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
+async-trait = { workspace = true }
+rsa = { workspace = true }
+signature = { workspace = true }
+sha2_010 = { workspace = true }
 thiserror = { workspace = true }
 chrono = { workspace = true }
 sha2 = { workspace = true }
@@ -15,8 +19,16 @@ base64 = { workspace = true }
 aes-gcm = { workspace = true }
 rand = { workspace = true }
 uuid = { workspace = true }
-bcrypt = { workspace = true }
-jsonwebtoken = { workspace = true }
-jsonschema = { workspace = true }
+
+# wasm32-unknown-unknown has no OS RNG: enable the JS bridges so getrandom
+# compiles (0.4 via rand/aes-gcm, 0.2 via rsa's rand 0.8). Native builds are
+# unaffected.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.4", features = ["wasm_js"] }
+getrandom_02 = { package = "getrandom", version = "0.2", features = ["js"] }
 
 [dev-dependencies]
+futures-executor = "0.3"
+# rand 0.8 ThreadRng for RSA test keygen (rsa 0.9 takes rand_core 0.6 traits;
+# workspace rand is 0.10 — a different trait version).
+rand08 = { package = "rand", version = "0.8" }

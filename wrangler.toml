@@ -2,7 +2,7 @@
 # Deploy with: scripts/sync-worker.sh  (or CI: Deploy workflow dispatch)
 
 name = "serverless-worker"
-main = "build/worker/shim.mjs"
+main = "build/serverless-worker/shim.mjs"
 compatibility_date = "2026-09-01"
 
 [build]
@@ -10,10 +10,15 @@ command = "worker-build --release"
 
 # Plain (non-secret) vars. Secrets NEVER go here — use `wrangler secret put`
 # (SECRET_KEY, WORKER_KEY) or scripts/sync-worker.sh.
+# NOTE: there is deliberately no TENANT var — one worker IS one tenant and
+# engine::TENANT is a compile-time constant. Per-deploy knobs are below.
 [vars]
 ENVIRONMENT = "production"
-TENANT = "singleton"
 HTTP_TIMEOUT_MS = "15000"
+# AI assistant backend base URL (fallback when the AI_BASE_URL tenant secret
+# is absent). Empty = unconfigured; the /srv/ai/* + /ws routes answer 502
+# with setup instructions until set.
+AI_TARGET = ""
 # Public URL of this worker (no port — Workers route by URL, not host:port).
 # Update after first deploy; used for self-referencing webhook callbacks.
 WORKER_URL = "https://serverless-worker.<account>.workers.dev"
@@ -39,6 +44,19 @@ new_sqlite_classes = ["TenantDO"]
 
 [[analytics_engine_datasets]]
 binding = "USAGE"
+
+# Webhook delivery pipeline: the Cron Trigger claims due rows and enqueues
+# them; the queue consumer delivers with per-hook HMAC + backoff. Create once
+# with `wrangler queues create webhook-deliveries` (Phase 8 ops). Without the
+# queue, the scheduler delivers inline (best effort).
+[[queues.producers]]
+queue = "webhook-deliveries"
+binding = "WEBHOOKS"
+
+[[queues.consumers]]
+queue = "webhook-deliveries"
+max_batch_size = 10
+max_batch_timeout = 30
 
 [triggers]
 crons = ["*/5 * * * *"]

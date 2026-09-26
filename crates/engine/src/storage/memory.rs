@@ -2,6 +2,7 @@ use crate::model::Key;
 use crate::storage::database::{Cursor, Database, DatabaseCaps, Query, Row};
 use crate::storage::ir::{scalar_text, SrvFilter};
 use crate::storage::object_store::{BlobMeta, KeyInfo, ObjectStore, ObjectStoreCaps, PutInfo};
+use async_trait::async_trait;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -33,6 +34,7 @@ impl Default for InMemoryDatabase {
     }
 }
 
+#[async_trait(?Send)]
 impl Database for InMemoryDatabase {
     fn adapter(&self) -> &'static str {
         "memory"
@@ -42,7 +44,7 @@ impl Database for InMemoryDatabase {
         DatabaseCaps::none()
     }
 
-    fn insert(&mut self, table: &str, mut row: Row) -> anyhow::Result<i64> {
+    async fn insert(&mut self, table: &str, mut row: Row) -> anyhow::Result<i64> {
         let mut data = self.data.write().unwrap();
         let t = data.tables.entry(table.to_string()).or_default();
         let seq = match &row.key {
@@ -67,7 +69,7 @@ impl Database for InMemoryDatabase {
         Ok(seq)
     }
 
-    fn allocate_seqs(&mut self, board: &str, table: &str, n: i64) -> anyhow::Result<i64> {
+    async fn allocate_seqs(&mut self, board: &str, table: &str, n: i64) -> anyhow::Result<i64> {
         // The memory backend's Table.next_seq IS the atomic counter; the
         // write lock here makes the range reservation exclusive. `board`
         // doesn't scope the in-memory tables today, but records keys are
@@ -79,14 +81,14 @@ impl Database for InMemoryDatabase {
         Ok(t.next_seq - n + 1)
     }
 
-    fn get(&self, table: &str, pk: &Key) -> anyhow::Result<Option<Row>> {
+    async fn get(&self, table: &str, pk: &Key) -> anyhow::Result<Option<Row>> {
         let data = self.data.read().unwrap();
         let t = data.tables.get(table);
         let Some(t) = t else { return Ok(None) };
         Ok(t.rows.iter().find(|r| &r.key == pk).cloned())
     }
 
-    fn update(&mut self, table: &str, pk: &Key, patch: &serde_json::Value) -> anyhow::Result<()> {
+    async fn update(&mut self, table: &str, pk: &Key, patch: &serde_json::Value) -> anyhow::Result<()> {
         let mut data = self.data.write().unwrap();
         let t = data.tables.entry(table.to_string()).or_default();
         if let Some(r) = t.rows.iter_mut().find(|r| &r.key == pk) {
@@ -95,7 +97,7 @@ impl Database for InMemoryDatabase {
         Ok(())
     }
 
-    fn delete(&mut self, table: &str, filter: &SrvFilter) -> anyhow::Result<usize> {
+    async fn delete(&mut self, table: &str, filter: &SrvFilter) -> anyhow::Result<usize> {
         let mut data = self.data.write().unwrap();
         let t = data.tables.entry(table.to_string()).or_default();
         let before = t.rows.len();
@@ -103,40 +105,18 @@ impl Database for InMemoryDatabase {
         Ok(before - t.rows.len())
     }
 
-    fn query(&self, table: &str, q: &Query) -> anyhow::Result<Cursor> {
+    async fn query(&self, table: &str, q: &Query) -> anyhow::Result<Cursor> {
         let data = self.data.read().unwrap();
         let t = data.tables.get(table);
         let Some(t) = t else {
             return Ok(Cursor::default());
         };
-        let now = crate::crud::now_str();
-        let mut rows: Vec<Row> = t
-            .rows
-            .iter()
-            .filter(|r| q.filter.matches(&r.data))
-            .filter(|r| memory_ttl_alive(q.ttl.as_ref(), &r.data, &now))
-            .cloned()
-            .collect();
-        if !q.orders.is_empty() {
-            rows.sort_by(|a, b| compare_rows(a, b, &q.orders));
-        } else if let Some(qq) = search_query(&q.filter) {
-            rows.sort_by(|a, b| {
-                let sa = search_score(&a.data, &qq);
-                let sb = search_score(&b.data, &qq);
-                sb.partial_cmp(&sa)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-                    .then_with(|| a.key.cmp(&b.key))
-            });
-        } else {
-            rows.sort_by(|a, b| b.key.cmp(&a.key));
-        }
-        let start = q.offset.min(rows.len());
-        let has_more = start + q.limit < rows.len();
-        let end = (start + q.limit).min(rows.len());
-        Ok(Cursor { rows: rows[start..end].to_vec(), has_more })
+        let rows: Vec<Row> = t.rows.iter().cloned().collect();
+        drop(data);
+        Ok(apply_query(rows, q))
     }
 
-    fn upsert(&mut self, table: &str, key: &str, mut row: Row) -> anyhow::Result<i64> {
+    async fn upsert(&mut self, table: &str, key: &str, mut row: Row) -> anyhow::Result<i64> {
         let mut data = self.data.write().unwrap();
         let t = data.tables.entry(table.to_string()).or_default();
         let unique = crate::expr::get_path(&row.data, key);
@@ -161,6 +141,36 @@ impl Database for InMemoryDatabase {
         t.rows.push(row);
         Ok(t.next_seq)
     }
+}
+
+/// Apply a [`Query`]'s filter (incl. read-time TTL), ordering, and pagination
+/// to already-fetched rows — the exact semantics of [`InMemoryDatabase::query`].
+/// Backends that fetch-then-filter (e.g. D1) reuse this so every adapter
+/// behaves identically.
+pub fn apply_query(rows: Vec<Row>, q: &Query) -> Cursor {
+    let now = crate::crud::now_str();
+    let mut rows: Vec<Row> = rows
+        .into_iter()
+        .filter(|r| q.filter.matches(&r.data))
+        .filter(|r| memory_ttl_alive(q.ttl.as_ref(), &r.data, &now))
+        .collect();
+    if !q.orders.is_empty() {
+        rows.sort_by(|a, b| compare_rows(a, b, &q.orders));
+    } else if let Some(qq) = search_query(&q.filter) {
+        rows.sort_by(|a, b| {
+            let sa = search_score(&a.data, &qq);
+            let sb = search_score(&b.data, &qq);
+            sb.partial_cmp(&sa)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.key.cmp(&b.key))
+        });
+    } else {
+        rows.sort_by(|a, b| b.key.cmp(&a.key));
+    }
+    let start = q.offset.min(rows.len());
+    let has_more = start + q.limit < rows.len();
+    let end = (start + q.limit).min(rows.len());
+    Cursor { rows: rows[start..end].to_vec(), has_more }
 }
 
 fn search_query(filter: &SrvFilter) -> Option<String> {
@@ -243,8 +253,9 @@ impl Default for InMemoryObjectStore {
     }
 }
 
+#[async_trait(?Send)]
 impl ObjectStore for InMemoryObjectStore {
-    fn put(&self, key: &str, bytes: &[u8]) -> anyhow::Result<PutInfo> {
+    async fn put(&self, key: &str, bytes: &[u8]) -> anyhow::Result<PutInfo> {
         let mut hasher = Sha256::new();
         hasher.update(bytes);
         let digest = hasher.finalize();
@@ -261,20 +272,20 @@ impl ObjectStore for InMemoryObjectStore {
         Ok(PutInfo { key: key.to_string(), size, sha256: hex })
     }
 
-    fn get(&self, key: &str) -> anyhow::Result<Option<Vec<u8>>> {
+    async fn get(&self, key: &str) -> anyhow::Result<Option<Vec<u8>>> {
         Ok(self.data.read().unwrap().get(key).map(|b| b.bytes.clone()))
     }
 
-    fn head(&self, key: &str) -> anyhow::Result<Option<BlobMeta>> {
+    async fn head(&self, key: &str) -> anyhow::Result<Option<BlobMeta>> {
         Ok(self.data.read().unwrap().get(key).map(|b| b.meta.clone()))
     }
 
-    fn delete(&self, key: &str) -> anyhow::Result<()> {
+    async fn delete(&self, key: &str) -> anyhow::Result<()> {
         self.data.write().unwrap().remove(key);
         Ok(())
     }
 
-    fn list(&self, prefix: &str) -> anyhow::Result<Vec<KeyInfo>> {
+    async fn list(&self, prefix: &str) -> anyhow::Result<Vec<KeyInfo>> {
         let data = self.data.read().unwrap();
         let mut out: Vec<KeyInfo> = data
             .iter()
@@ -285,7 +296,7 @@ impl ObjectStore for InMemoryObjectStore {
         Ok(out)
     }
 
-    fn copy(&self, from: &str, to: &str) -> anyhow::Result<bool> {
+    async fn copy(&self, from: &str, to: &str) -> anyhow::Result<bool> {
         let src = {
             let data = self.data.read().unwrap();
             data.get(from).map(|b| (b.bytes.clone(), b.meta.clone()))

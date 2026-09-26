@@ -1,7 +1,7 @@
 // Table-name constants shared by every engine module. The in-memory `Database`
 // adapter stores rows in string-keyed tables; all modules must agree on names.
 
-pub const TABLE_APPS: &str = "wb_apps";
+pub const TABLE_TENANT: &str = "wb_tenant";
 pub const TABLE_RECORDS: &str = "wb_records";
 pub const TABLE_KEYS: &str = "wb_keys";
 pub const TABLE_RECIPES: &str = "wb_recipes";
@@ -19,6 +19,8 @@ pub const TABLE_USERS: &str = "wb_users";
 pub const TABLE_SESSIONS: &str = "wb_sessions";
 pub const TABLE_TABLES: &str = "wb_tables";
 
-pub fn scoped_key(board_id: &str, name: &str) -> String {
-    format!("{board_id}/{name}")
+/// Key scope for the single tenant. There is only one tenant, so the scope
+/// prefix is the constant [`crate::TENANT`].
+pub fn tenant_key(name: &str) -> String {
+    format!("{}/{name}", crate::TENANT)
 }

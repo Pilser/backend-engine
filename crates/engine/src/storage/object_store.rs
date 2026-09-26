@@ -38,22 +38,24 @@ impl ObjectStoreCaps {
     }
 }
 
+/// Blob seam. Async (`?Send`) for the R2 adapter; see [`crate::storage::database::Database`].
+#[async_trait::async_trait(?Send)]
 pub trait ObjectStore: Send + Sync + 'static {
-    fn put(&self, key: &str, bytes: &[u8]) -> anyhow::Result<PutInfo>;
+    async fn put(&self, key: &str, bytes: &[u8]) -> anyhow::Result<PutInfo>;
 
-    fn get(&self, key: &str) -> anyhow::Result<Option<Vec<u8>>>;
+    async fn get(&self, key: &str) -> anyhow::Result<Option<Vec<u8>>>;
 
-    fn head(&self, key: &str) -> anyhow::Result<Option<BlobMeta>>;
+    async fn head(&self, key: &str) -> anyhow::Result<Option<BlobMeta>>;
 
-    fn delete(&self, key: &str) -> anyhow::Result<()>;
+    async fn delete(&self, key: &str) -> anyhow::Result<()>;
 
-    fn list(&self, prefix: &str) -> anyhow::Result<Vec<KeyInfo>>;
+    async fn list(&self, prefix: &str) -> anyhow::Result<Vec<KeyInfo>>;
 
-    fn presign(&self, _key: &str, _method: &str, _ttl: chrono::Duration) -> anyhow::Result<Option<String>> {
+    async fn presign(&self, _key: &str, _method: &str, _ttl: chrono::Duration) -> anyhow::Result<Option<String>> {
         Ok(None)
     }
 
-    fn copy(&self, _from: &str, _to: &str) -> anyhow::Result<bool> {
+    async fn copy(&self, _from: &str, _to: &str) -> anyhow::Result<bool> {
         Ok(false)
     }
 

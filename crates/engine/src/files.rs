@@ -2,16 +2,13 @@ use crate::model::{Key, Principal, SubApp};
 use crate::storage::database::{Database, Query, Row};
 use crate::storage::ir::{FilterCond, Op, SrvFilter};
 use crate::storage::object_store::{KeyInfo, ObjectStore};
-use crate::tables::{scoped_key, TABLE_RECORDS, TABLE_SUBAPPS};
+use crate::tables::{tenant_key, TABLE_RECORDS, TABLE_SUBAPPS};
 use serde_json::{json, Value as Json};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 fn file_id() -> String {
     const CHARS: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyz";
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
+    // chrono reads the host clock on wasm (js_sys::Date); SystemTime panics.
+    let nanos = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0) as u64;
     let mut out = String::from("f_");
     let mut n = nanos;
     for _ in 0..16 {
@@ -21,10 +18,9 @@ fn file_id() -> String {
     out
 }
 
-pub fn file_upload(
+pub async fn file_upload(
     db: &mut dyn Database,
     store: &dyn ObjectStore,
-    board_id: &str,
     table: &str,
     filename: &str,
     content_type: &str,
@@ -32,13 +28,14 @@ pub fn file_upload(
     meta: &Json,
     folder: Option<&str>,
 ) -> anyhow::Result<i64> {
-    // Optional subfolder for organization: {board}/files/{folder}/f_<id>.bin.
-    // Without a folder (the default), uploads stay flat: {board}/files/f_<id>.bin.
+    // Optional subfolder for organization: {tenant}/files/{folder}/f_<id>.bin.
+    // Without a folder (the default), uploads stay flat: {tenant}/files/f_<id>.bin.
+    let tenant = crate::TENANT;
     let key = match folder {
-        Some(f) if !f.is_empty() => format!("{board_id}/files/{}/f_{}.bin", f, file_id()),
-        _ => format!("{board_id}/files/f_{}.bin", file_id()),
+        Some(f) if !f.is_empty() => format!("{tenant}/files/{}/f_{}.bin", f, file_id()),
+        _ => format!("{tenant}/files/f_{}.bin", file_id()),
     };
-    store.put(&key, bytes)?;
+    store.put(&key, bytes).await?;
     let mut payload = serde_json::json!({
         "file": key,
         "name": filename,
@@ -53,19 +50,14 @@ pub fn file_upload(
         }
     }
     let principal =
-        Principal { id: board_id.to_string(), role: "owner".to_string(), scope: None, writer: None };
-    crate::crud::record_insert(db, board_id, table, payload, None, false, &principal)
+        Principal { id: crate::TENANT.to_string(), role: "owner".to_string(), scope: None, writer: None };
+    crate::crud::record_insert(db, table, payload, None, false, &principal).await
 }
 
-fn content_type_for(db: &dyn Database, board_id: &str, table: &str, file: &str) -> anyhow::Result<String> {
+async fn content_type_for(db: &dyn Database, table: &str, file: &str) -> anyhow::Result<String> {
     let q = Query {
         filter: SrvFilter {
             conds: vec![
-                FilterCond {
-                    field: "$.board_id".to_string(),
-                    op: Op::Eq,
-                    value: Json::String(board_id.to_string()),
-                },
                 FilterCond {
                     field: "$.table".to_string(),
                     op: Op::Eq,
@@ -83,7 +75,7 @@ fn content_type_for(db: &dyn Database, board_id: &str, table: &str, file: &str) 
         offset: 0,
         ttl: None,
     };
-    let Some(row) = db.query(TABLE_RECORDS, &q)?.rows.into_iter().next() else {
+    let Some(row) = db.query(TABLE_RECORDS, &q).await?.rows.into_iter().next() else {
         return Ok("application/octet-stream".to_string());
     };
     let ct = row
@@ -94,32 +86,31 @@ fn content_type_for(db: &dyn Database, board_id: &str, table: &str, file: &str) 
     Ok(ct.to_string())
 }
 
-pub fn file_download(
+pub async fn file_download(
     db: &dyn Database,
     store: &dyn ObjectStore,
-    board_id: &str,
     table: &str,
     file: &str,
 ) -> anyhow::Result<Option<(Vec<u8>, String)>> {
-    let prefix = format!("{board_id}/files/");
+    let prefix = format!("{}/files/", crate::TENANT);
     if !file.starts_with(&prefix) {
         return Ok(None);
     }
-    let Some(bytes) = store.get(file)? else {
+    let Some(bytes) = store.get(file).await? else {
         return Ok(None);
     };
-    let content_type = content_type_for(db, board_id, table, file)?;
+    let content_type = content_type_for(db, table, file).await?;
     Ok(Some((bytes, content_type)))
 }
 
-pub fn file_list(store: &dyn ObjectStore, board_id: &str) -> anyhow::Result<Vec<KeyInfo>> {
-    store.list(&format!("{board_id}/files/"))
+pub async fn file_list(store: &dyn ObjectStore) -> anyhow::Result<Vec<KeyInfo>> {
+    store.list(&format!("{}/files/", crate::TENANT)).await
 }
 
-// ---- per-board static assets (front-end hosting) ----------------------
+// ---- tenant static assets (front-end hosting) -------------------------
 
-pub fn asset_prefix(board_id: &str) -> String {
-    format!("{board_id}/assets/")
+pub fn asset_prefix() -> String {
+    format!("{}/assets/", crate::TENANT)
 }
 
 pub fn sanitize_asset_path(rel: &str) -> anyhow::Result<String> {
@@ -136,9 +127,9 @@ pub fn sanitize_asset_path(rel: &str) -> anyhow::Result<String> {
     Ok(rel.to_string())
 }
 
-pub fn asset_key(board_id: &str, rel: &str) -> anyhow::Result<String> {
+pub fn asset_key(rel: &str) -> anyhow::Result<String> {
     let rel = sanitize_asset_path(rel)?;
-    Ok(format!("{}{rel}", asset_prefix(board_id)))
+    Ok(format!("{}{rel}", asset_prefix()))
 }
 
 pub fn content_type_from_path(rel: &str) -> &'static str {
@@ -175,62 +166,60 @@ pub fn content_type_from_path(rel: &str) -> &'static str {
     }
 }
 
-pub fn asset_put(
+pub async fn asset_put(
     store: &dyn ObjectStore,
-    board_id: &str,
     rel: &str,
     bytes: &[u8],
 ) -> anyhow::Result<()> {
-    let key = asset_key(board_id, rel)?;
-    store.put(&key, bytes)?;
+    let key = asset_key(rel)?;
+    store.put(&key, bytes).await?;
     Ok(())
 }
 
-pub fn asset_get(
+pub async fn asset_get(
     store: &dyn ObjectStore,
-    board_id: &str,
     rel: &str,
 ) -> anyhow::Result<Option<(Vec<u8>, String)>> {
-    let key = asset_key(board_id, rel)?;
-    let Some(bytes) = store.get(&key)? else {
+    let key = asset_key(rel)?;
+    let Some(bytes) = store.get(&key).await? else {
         return Ok(None);
     };
     Ok(Some((bytes, content_type_from_path(&key).to_string())))
 }
 
-pub fn asset_head(store: &dyn ObjectStore, board_id: &str, rel: &str) -> anyhow::Result<Option<crate::storage::object_store::BlobMeta>> {
-    let key = asset_key(board_id, rel)?;
-    store.head(&key)
+pub async fn asset_head(store: &dyn ObjectStore, rel: &str) -> anyhow::Result<Option<crate::storage::object_store::BlobMeta>> {
+    let key = asset_key(rel)?;
+    store.head(&key).await
 }
 
-pub fn asset_delete(store: &dyn ObjectStore, board_id: &str, rel: &str) -> anyhow::Result<bool> {
-    let key = asset_key(board_id, rel)?;
-    if store.head(&key)?.is_none() {
+pub async fn asset_delete(store: &dyn ObjectStore, rel: &str) -> anyhow::Result<bool> {
+    let key = asset_key(rel)?;
+    if store.head(&key).await?.is_none() {
         return Ok(false);
     }
-    store.delete(&key)?;
+    store.delete(&key).await?;
     Ok(true)
 }
 
 /// Delete every asset under a relative prefix (e.g. a sub-app slug) and
 /// return how many files were removed.
-pub fn asset_delete_prefix(store: &dyn ObjectStore, board_id: &str, prefix: &str) -> anyhow::Result<usize> {
+pub async fn asset_delete_prefix(store: &dyn ObjectStore, prefix: &str) -> anyhow::Result<usize> {
     let p = sanitize_asset_path(prefix)?;
-    let full_prefix = format!("{}{}/", asset_prefix(board_id), p);
-    let keys = store.list(&full_prefix)?;
+    let full_prefix = format!("{}{}/", asset_prefix(), p);
+    let keys = store.list(&full_prefix).await?;
     let mut n = 0usize;
     for k in keys {
-        store.delete(&k.key)?;
+        store.delete(&k.key).await?;
         n += 1;
     }
     Ok(n)
 }
 
-pub fn asset_list(store: &dyn ObjectStore, board_id: &str) -> anyhow::Result<Vec<KeyInfo>> {
-    Ok(store
-        .list(&asset_prefix(board_id))?
+pub async fn asset_list(store: &dyn ObjectStore) -> anyhow::Result<Vec<KeyInfo>> {
+    let prefix = asset_prefix();
+    Ok(store.list(&prefix).await?
         .into_iter()
-        .map(|k| KeyInfo { key: k.key.trim_start_matches(&asset_prefix(board_id)).to_string(), size: k.size })
+        .map(|k| KeyInfo { key: k.key.trim_start_matches(&prefix).to_string(), size: k.size })
         .collect())
 }
 
@@ -244,16 +233,14 @@ pub fn validate_slug(slug: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn subapp_put(
+pub async fn subapp_put(
     db: &mut dyn Database,
-    board_id: &str,
     slug: &str,
     title: Option<&str>,
     index: Option<&str>,
 ) -> anyhow::Result<()> {
     validate_slug(slug)?;
     let sub = SubApp {
-        board_id: board_id.to_string(),
         slug: slug.to_string(),
         title: title.map(String::from),
         index: index
@@ -261,44 +248,42 @@ pub fn subapp_put(
             .unwrap_or_else(|| format!("{slug}/index.html")),
         created_at: crate::crud::now_str(),
     };
-    let mut data = serde_json::to_value(&sub)?;
-    data["board_id"] = json!(board_id);
-    db.insert(TABLE_SUBAPPS, Row::new(Key::text(scoped_key(board_id, slug)), data))?;
+    let data = serde_json::to_value(&sub)?;
+    db.insert(TABLE_SUBAPPS, Row::new(Key::text(tenant_key(slug)), data)).await?;
     Ok(())
 }
 
-pub fn subapp_list(db: &dyn Database, board_id: &str) -> anyhow::Result<Vec<SubApp>> {
+pub async fn subapp_list(db: &dyn Database) -> anyhow::Result<Vec<SubApp>> {
     let q = Query {
-        filter: SrvFilter { conds: vec![FilterCond { field: "$.board_id".to_string(), op: Op::Eq, value: json!(board_id) }] },
+        filter: SrvFilter { conds: Vec::new() },
         orders: vec![("$.slug".to_string(), false)],
         limit: usize::MAX,
         offset: 0,
         ttl: None,
     };
     let mut out = Vec::new();
-    for row in db.query(TABLE_SUBAPPS, &q)?.rows {
+    for row in db.query(TABLE_SUBAPPS, &q).await?.rows {
         out.push(serde_json::from_value(row.data)?);
     }
     Ok(out)
 }
 
-pub fn subapp_get(db: &dyn Database, board_id: &str, slug: &str) -> anyhow::Result<Option<SubApp>> {
-    let key = Key::text(scoped_key(board_id, slug));
-    let Some(row) = db.get(TABLE_SUBAPPS, &key)? else {
+pub async fn subapp_get(db: &dyn Database, slug: &str) -> anyhow::Result<Option<SubApp>> {
+    let key = Key::text(tenant_key(slug));
+    let Some(row) = db.get(TABLE_SUBAPPS, &key).await? else {
         return Ok(None);
     };
     Ok(serde_json::from_value(row.data)?)
 }
 
-pub fn subapp_remove(db: &mut dyn Database, board_id: &str, slug: &str) -> anyhow::Result<bool> {
+pub async fn subapp_remove(db: &mut dyn Database, slug: &str) -> anyhow::Result<bool> {
     let n = db.delete(
         TABLE_SUBAPPS,
         &SrvFilter {
             conds: vec![
-                FilterCond { field: "$.board_id".to_string(), op: Op::Eq, value: json!(board_id) },
                 FilterCond { field: "$.slug".to_string(), op: Op::Eq, value: json!(slug) },
             ],
         },
-    )?;
+    ).await?;
     Ok(n > 0)
 }

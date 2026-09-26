@@ -3,13 +3,12 @@ use engine::model::Principal;
 use engine::ServerlessEngine;
 use serde_json::{json, Value as Json};
 
-pub fn list(
+pub async fn list(
     engine: &ServerlessEngine,
     _principal: &Principal,
-    arguments: &Json,
+    _arguments: &Json,
 ) -> Result<Json, String> {
-    let board = arg_str(arguments, "board")?;
-    let recipes = engine.list_recipes(board).map_err(|e| e.to_string())?;
+    let recipes = engine.list_recipes().await.map_err(|e| e.to_string())?;
     let out: Vec<Json> = recipes
         .into_iter()
         .map(|r| json!({ "name": r.name, "enabled": r.enabled }))
@@ -17,17 +16,15 @@ pub fn list(
     ok(json!({ "recipes": out }))
 }
 
-pub fn show(
+pub async fn show(
     engine: &ServerlessEngine,
     _principal: &Principal,
     arguments: &Json,
 ) -> Result<Json, String> {
-    let board = arg_str(arguments, "board")?;
     let name = arg_str(arguments, "name")?;
-    let recipe = engine
-        .get_recipe(board, name)
+    let recipe = engine.get_recipe(name).await
         .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("recipe '{name}' not found on board {board}"))?;
+        .ok_or_else(|| format!("recipe '{name}' not found"))?;
     ok(json!({
         "name": recipe.name,
         "enabled": recipe.enabled,
@@ -39,12 +36,11 @@ pub fn show(
     }))
 }
 
-pub fn add(
+pub async fn add(
     engine: &mut ServerlessEngine,
     _principal: &Principal,
     arguments: &Json,
 ) -> Result<Json, String> {
-    let board = arg_str(arguments, "board")?;
     let name = arg_str(arguments, "name")?;
     let recipe = engine::model::Recipe {
         name: name.to_string(),
@@ -55,6 +51,6 @@ pub fn add(
         actions_json: arguments.get("actions").cloned(),
         table: arguments.get("table").and_then(|t| t.as_str()).map(String::from),
     };
-    engine.add_recipe(board, &recipe).map_err(|e| e.to_string())?;
+    engine.add_recipe(&recipe).await.map_err(|e| e.to_string())?;
     ok(json!({ "name": name }))
 }

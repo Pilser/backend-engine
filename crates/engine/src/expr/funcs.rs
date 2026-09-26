@@ -360,9 +360,7 @@ fn rand_byte() -> u8 {
     use std::sync::atomic::{AtomicU64, Ordering};
     static CTR: AtomicU64 = AtomicU64::new(0);
     let c = CTR.fetch_add(1, Ordering::Relaxed);
-    let t = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0);
+    // chrono reads the host clock on wasm (js_sys::Date); SystemTime panics.
+    let t = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0) as u64;
     ((t ^ c) & 0xff) as u8
 }

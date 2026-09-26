@@ -24,7 +24,7 @@ pub mod tables;
 pub mod webhooks;
 
 pub use crate::model::{
-    Board, Capability, Hook, Job, JobRun, Key, KeyRecord, Link, Principal, Recipe, Record, Secret,
+    Capability, Hook, Job, JobRun, Key, KeyRecord, Link, Principal, Recipe, Record, Secret, Tenant,
 };
 pub use crate::storage::database::{Cursor, Database, DatabaseCaps, Query, Row, Value};
 pub use crate::storage::ir::{parse_filter, Agg, FilterCond, Op, SrvFilter};
@@ -34,6 +34,12 @@ pub use crate::storage::object_store::{
 pub use crate::engine::{Notify, ServerlessEngine};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Single-tenant id. One Worker = one app: every key scope that used to
+/// carry a per-board id now carries this constant. Stored rows no longer
+/// carry any tenant field at all. Compile-time by design (there is no
+/// `TENANT` env var to drift from).
+pub const TENANT: &str = "singleton";
 
 pub fn version() -> &'static str {
     VERSION

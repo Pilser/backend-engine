@@ -1,5 +1,6 @@
 use crate::model::Key;
 use crate::storage::ir::SrvFilter;
+use async_trait::async_trait;
 use serde_json::{json, Value as Json};
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -97,32 +98,36 @@ impl DatabaseCaps {
     }
 }
 
+/// Storage seam. Async (`?Send`: worker futures such as JsFuture are `!Send`,
+/// and nothing on the isolate requires `Send`) so D1/R2 adapters can await
+/// host I/O. See PORT-TRACK.md Phase 5a.
+#[async_trait(?Send)]
 pub trait Database: Send + Sync + 'static {
     fn adapter(&self) -> &'static str;
 
     fn capabilities(&self) -> DatabaseCaps;
 
-    fn insert(&mut self, table: &str, row: Row) -> anyhow::Result<i64>;
+    async fn insert(&mut self, table: &str, row: Row) -> anyhow::Result<i64>;
 
     /// Insert many rows in one batch. Default falls back to per-row `insert`;
     /// adapters (e.g. HelixDB) override to send a single write batch.
-    fn bulk_insert(&mut self, table: &str, rows: Vec<Row>) -> anyhow::Result<Vec<i64>> {
+    async fn bulk_insert(&mut self, table: &str, rows: Vec<Row>) -> anyhow::Result<Vec<i64>> {
         let mut seqs = Vec::with_capacity(rows.len());
         for row in rows {
-            seqs.push(self.insert(table, row)?);
+            seqs.push(self.insert(table, row).await?);
         }
         Ok(seqs)
     }
 
-    fn get(&self, table: &str, pk: &Key) -> anyhow::Result<Option<Row>>;
+    async fn get(&self, table: &str, pk: &Key) -> anyhow::Result<Option<Row>>;
 
-    fn update(&mut self, table: &str, pk: &Key, patch: &Json) -> anyhow::Result<()>;
+    async fn update(&mut self, table: &str, pk: &Key, patch: &Json) -> anyhow::Result<()>;
 
-    fn delete(&mut self, table: &str, filter: &SrvFilter) -> anyhow::Result<usize>;
+    async fn delete(&mut self, table: &str, filter: &SrvFilter) -> anyhow::Result<usize>;
 
-    fn query(&self, table: &str, q: &Query) -> anyhow::Result<Cursor>;
+    async fn query(&self, table: &str, q: &Query) -> anyhow::Result<Cursor>;
 
-    fn upsert(&mut self, table: &str, key: &str, row: Row) -> anyhow::Result<i64>;
+    async fn upsert(&mut self, table: &str, key: &str, row: Row) -> anyhow::Result<i64>;
 
     // ---- graph (HelixDB) -------------------------------------------------
     // Optional graph operations over nodes/edges, scoped to a board tenant.
@@ -130,7 +135,7 @@ pub trait Database: Send + Sync + 'static {
     // (memory) degrade gracefully; the HelixDB adapter overrides them.
 
     /// Link two nodes by an edge label with optional edge properties.
-    fn link(
+    async fn link(
         &mut self,
         _board: &str,
         _from: i64,
@@ -144,7 +149,7 @@ pub trait Database: Send + Sync + 'static {
     /// Create MANY edges in one write batch (much cheaper than N `link` calls
     /// for graph sync). Each entry is (from_node_id, label, to_node_id).
     /// Returns the created edge ids.
-    fn link_batch(
+    async fn link_batch(
         &mut self,
         _board: &str,
         _edges: &[(i64, String, i64)],
@@ -154,7 +159,7 @@ pub trait Database: Send + Sync + 'static {
 
     /// Traverse from a node along an edge label (out/in/both), optionally
     /// multi-hop. Returns reached node ids with their data.
-    fn traverse(
+    async fn traverse(
         &self,
         _board: &str,
         _from: i64,
@@ -166,7 +171,7 @@ pub trait Database: Send + Sync + 'static {
     }
 
     /// Search edges by BM25 over an edge property within the board tenant.
-    fn search_edges(
+    async fn search_edges(
         &self,
         _board: &str,
         _label: &str,
@@ -178,37 +183,37 @@ pub trait Database: Send + Sync + 'static {
     }
 
     /// Drop an edge by its Helix edge id (`$id`).
-    fn unlink(&mut self, _board: &str, _edge_id: i64) -> anyhow::Result<bool> {
+    async fn unlink(&mut self, _board: &str, _edge_id: i64) -> anyhow::Result<bool> {
         anyhow::bail!("graph unlink is not supported by the {} backend", self.adapter())
     }
 
     /// Drop a node and every edge touching it (both directions). Helix does
     /// NOT cascade edge deletes on node drop, so edges must be removed first.
-    fn delete_node(&mut self, _board: &str, _node_id: i64) -> anyhow::Result<usize> {
+    async fn delete_node(&mut self, _board: &str, _node_id: i64) -> anyhow::Result<usize> {
         anyhow::bail!("graph node delete is not supported by the {} backend", self.adapter())
     }
 
     /// Begin a write transaction scoped to a board's shard. Default is a no-op
     /// (memory backend and non-transactional adapters). Used by bulk loads to
     /// amortize commit/sync cost across many record inserts.
-    fn begin(&mut self, _board: &str) -> anyhow::Result<()> {
+    async fn begin(&mut self, _board: &str) -> anyhow::Result<()> {
         Ok(())
     }
 
     /// Commit an open board transaction started with [`Database::begin`].
-    fn commit(&mut self, _board: &str) -> anyhow::Result<()> {
+    async fn commit(&mut self, _board: &str) -> anyhow::Result<()> {
         Ok(())
     }
 
     /// Roll back an open board transaction started with [`Database::begin`].
-    fn rollback(&mut self, _board: &str) -> anyhow::Result<()> {
+    async fn rollback(&mut self, _board: &str) -> anyhow::Result<()> {
         Ok(())
     }
 
     /// Run an aggregate over `table`, optionally grouped. Default implementation
     /// loads rows and aggregates in Rust; a SQL-capable adapter overrides it.
     /// `filter` carries only the user's conditions (matched against payload).
-    fn aggregate(
+    async fn aggregate(
         &self,
         table: &str,
         board: &str,
@@ -219,14 +224,10 @@ pub trait Database: Send + Sync + 'static {
         group_by: Option<&str>,
         ttl: Option<TtlClause>,
     ) -> anyhow::Result<Vec<Json>> {
+        let _ = board;
         let q = Query {
             filter: crate::storage::ir::SrvFilter {
                 conds: vec![
-                    crate::storage::ir::FilterCond {
-                        field: "$.board_id".to_string(),
-                        op: crate::storage::ir::Op::Eq,
-                        value: Json::String(board.to_string()),
-                    },
                     crate::storage::ir::FilterCond {
                         field: "$.table".to_string(),
                         op: crate::storage::ir::Op::Eq,
@@ -239,7 +240,7 @@ pub trait Database: Send + Sync + 'static {
             offset: 0,
             ttl: ttl.clone(),
         };
-        let rows = self.query(table, &q)?.rows;
+        let rows = self.query(table, &q).await?.rows;
         aggregate_rows(&rows, filter, agg, field, group_by, ttl)
     }
 
@@ -248,7 +249,7 @@ pub trait Database: Send + Sync + 'static {
     /// caller. Adapters that can increment a counter server-side override this
     /// (HelixDB); the default falls back to read-max+1 which is ONLY safe under
     /// an external exclusive lock.
-    fn allocate_seqs(&mut self, _board: &str, _table: &str, n: i64) -> anyhow::Result<i64> {
+    async fn allocate_seqs(&mut self, _board: &str, _table: &str, n: i64) -> anyhow::Result<i64> {
         let _ = n;
         anyhow::bail!("allocate_seqs not supported by the {} backend", self.adapter())
     }
@@ -256,7 +257,7 @@ pub trait Database: Send + Sync + 'static {
     /// Count every record on a board in one cheap query. Default implementation
     /// sums per-table aggregates; a backend that can count a whole tenant in a
     /// single query (e.g. HelixDB) overrides it.
-    fn count_records(&self, _board: &str) -> anyhow::Result<i64> {
+    async fn count_records(&self, _board: &str) -> anyhow::Result<i64> {
         anyhow::bail!("count_records is not supported by the {} backend", self.adapter())
     }
 }

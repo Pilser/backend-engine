@@ -1,15 +1,14 @@
-use super::{arg_str, ok};
+use super::ok;
 use engine::model::Principal;
 use engine::ServerlessEngine;
 use serde_json::{json, Value as Json};
 
-pub fn list(
+pub async fn list(
     engine: &ServerlessEngine,
     _principal: &Principal,
-    arguments: &Json,
+    _arguments: &Json,
 ) -> Result<Json, String> {
-    let board = arg_str(arguments, "board")?;
-    let links = engine.list_links(board).map_err(|e| e.to_string())?;
+    let links = engine.list_links().await.map_err(|e| e.to_string())?;
     let out: Vec<Json> = links
         .into_iter()
         .map(|l| {
@@ -24,16 +23,14 @@ pub fn list(
     ok(json!({ "links": out }))
 }
 
-pub fn show(
+pub async fn show(
     engine: &ServerlessEngine,
     _principal: &Principal,
-    arguments: &Json,
+    _arguments: &Json,
 ) -> Result<Json, String> {
-    let board = arg_str(arguments, "board")?;
-    let link = engine
-        .get_link(board)
+    let link = engine.get_link().await
         .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("no link configured for board {board}"))?;
+        .ok_or_else(|| "no link configured".to_string())?;
     ok(json!({
         "child_board": link.child_board,
         "child_table": link.child_table,
@@ -44,24 +41,23 @@ pub fn show(
     }))
 }
 
-/// `graph.schema` — the graph wiring of a board as seen by the engine.
+/// `graph.schema` — the link wiring of the app as seen by the engine.
 ///
 /// Reports the declarative wiring the engine tracks: the parent/child link
 /// (from `wb_links`) plus per-concern counts. Edge-label tracking (a
 /// `wb_graph_schema` table maintained on link/unlink/sync) is proposed in
 /// docs/graph-schema-tracking.md.
-pub fn schema(
+pub async fn schema(
     engine: &ServerlessEngine,
     _principal: &Principal,
-    arguments: &Json,
+    _arguments: &Json,
 ) -> Result<Json, String> {
-    let board = arg_str(arguments, "board")?;
-    let links = engine.list_links(board).map_err(|e| e.to_string())?;
-    let tables = engine.list_tables(board).map_err(|e| e.to_string())?;
-    let recipes = engine.list_recipes(board).map_err(|e| e.to_string())?;
-    let jobs = engine.list_jobs(board).map_err(|e| e.to_string())?;
+    let links = engine.list_links().await.map_err(|e| e.to_string())?;
+    let tables = engine.list_tables().await.map_err(|e| e.to_string())?;
+    let recipes = engine.list_recipes().await.map_err(|e| e.to_string())?;
+    let jobs = engine.list_jobs().await.map_err(|e| e.to_string())?;
     ok(json!({
-        "board": board,
+        "tenant": engine::TENANT,
         "links": links,
         "tables": tables.iter().map(|t| t.table.clone()).collect::<Vec<_>>(),
         "recipe_count": recipes.len(),

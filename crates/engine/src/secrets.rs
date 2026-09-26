@@ -1,7 +1,7 @@
 use crate::model::{Key, Secret};
 use crate::storage::database::{Database, Query, Row};
 use crate::storage::ir::{FilterCond, Op, SrvFilter};
-use crate::tables::{scoped_key, TABLE_APP_SECRETS};
+use crate::tables::TABLE_APP_SECRETS;
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
 use base64::Engine;
@@ -12,18 +12,45 @@ use std::collections::HashMap;
 
 const NONCE_LEN: usize = 12;
 
-pub(crate) fn master_key() -> [u8; 32] {
-    const DEV: &str = "srv-fixed-dev-master-key-do-not-use-in-production";
-    let gen = match std::env::var("SRV_SECRET_KEY") {
-        Ok(k) if !k.is_empty() => k,
-        _ => DEV.to_string(),
-    };
-    let bytes = gen.as_bytes();
+static MASTER_KEY_OVERRIDE: std::sync::OnceLock<[u8; 32]> = std::sync::OnceLock::new();
+
+fn derive_key(secret: &str) -> [u8; 32] {
+    let bytes = secret.as_bytes();
     let mut out = [0u8; 32];
     for (i, b) in out.iter_mut().enumerate() {
         *b = bytes[i % bytes.len().max(1)];
     }
     out
+}
+
+pub(crate) fn master_key() -> [u8; 32] {
+    if let Some(k) = MASTER_KEY_OVERRIDE.get() {
+        return *k;
+    }
+    const DEV: &str = "srv-fixed-dev-master-key-do-not-use-in-production";
+    let gen = match std::env::var("SECRET_KEY") {
+        Ok(k) if !k.is_empty() => k,
+        _ => DEV.to_string(),
+    };
+    derive_key(&gen)
+}
+
+/// Inject the at-rest encryption key explicitly. The Worker calls this once
+/// per isolate from the `SECRET_KEY` binding (`std::env` is always empty on
+/// wasm). First call wins; repeating with the same value is a no-op.
+pub fn set_master_key(secret: &str) -> anyhow::Result<()> {
+    if secret.is_empty() {
+        anyhow::bail!("master key must not be empty");
+    }
+    let derived = derive_key(secret);
+    match MASTER_KEY_OVERRIDE.get() {
+        Some(existing) if *existing == derived => Ok(()),
+        Some(_) => anyhow::bail!("master key already set"),
+        None => {
+            let _ = MASTER_KEY_OVERRIDE.set(derived);
+            Ok(())
+        }
+    }
 }
 
 fn hex(digest: &[u8]) -> String {
@@ -69,23 +96,18 @@ pub fn decrypt_value(encoded: &str) -> anyhow::Result<Vec<u8>> {
     Ok(pt)
 }
 
-fn secret_filter(board_id: &str, name: &str) -> SrvFilter {
+fn secret_filter(name: &str) -> SrvFilter {
     SrvFilter {
         conds: vec![
-            FilterCond { field: "$.board_id".to_string(), op: Op::Eq, value: Json::String(board_id.to_string()) },
             FilterCond { field: "$.name".to_string(), op: Op::Eq, value: Json::String(name.to_string()) },
         ],
     }
 }
 
-fn secret_query(db: &dyn Database, board_id: &str) -> anyhow::Result<Vec<Secret>> {
+async fn secret_query(db: &dyn Database) -> anyhow::Result<Vec<Secret>> {
     let q = Query {
         filter: SrvFilter {
-            conds: vec![FilterCond {
-                field: "$.board_id".to_string(),
-                op: Op::Eq,
-                value: Json::String(board_id.to_string()),
-            }],
+            conds: Vec::new(),
         },
         orders: vec![("$.name".to_string(), false)],
         limit: usize::MAX,
@@ -93,54 +115,53 @@ fn secret_query(db: &dyn Database, board_id: &str) -> anyhow::Result<Vec<Secret>
         ttl: None,
     };
     let mut out = Vec::new();
-    for row in db.query(TABLE_APP_SECRETS, &q)?.rows {
+    for row in db.query(TABLE_APP_SECRETS, &q).await?.rows {
         out.push(serde_json::from_value(row.data)?);
     }
     Ok(out)
 }
 
-pub fn secret_set(db: &mut dyn Database, board_id: &str, name: &str, value: &str) -> anyhow::Result<()> {
+pub async fn secret_set(db: &mut dyn Database, name: &str, value: &str) -> anyhow::Result<()> {
     let name = name.to_uppercase();
     let secret = Secret {
         name: name.clone(),
         value_encrypted: encrypt_value(value.as_bytes())?,
         fingerprint: fingerprint(value.as_bytes()),
     };
-    db.delete(TABLE_APP_SECRETS, &secret_filter(board_id, &name))?;
-    let mut data = serde_json::to_value(&secret)?;
-    data["board_id"] = Json::String(board_id.to_string());
-    db.insert(TABLE_APP_SECRETS, Row::new(Key::text(scoped_key(board_id, &name)), data))?;
+    db.delete(TABLE_APP_SECRETS, &secret_filter(&name)).await?;
+    let data = serde_json::to_value(&secret)?;
+    db.insert(TABLE_APP_SECRETS, Row::new(Key::text(crate::tables::tenant_key(&name)), data)).await?;
     Ok(())
 }
 
-pub fn secret_list(db: &dyn Database, board_id: &str) -> anyhow::Result<Vec<Secret>> {
-    secret_query(db, board_id)
+pub async fn secret_list(db: &dyn Database) -> anyhow::Result<Vec<Secret>> {
+    secret_query(db).await
 }
 
-pub fn secret_get(db: &dyn Database, board_id: &str, name: &str) -> anyhow::Result<Option<Secret>> {
-    let key = Key::text(scoped_key(board_id, &name.to_uppercase()));
-    let Some(row) = db.get(TABLE_APP_SECRETS, &key)? else {
+pub async fn secret_get(db: &dyn Database, name: &str) -> anyhow::Result<Option<Secret>> {
+    let key = Key::text(crate::tables::tenant_key(&name.to_uppercase()));
+    let Some(row) = db.get(TABLE_APP_SECRETS, &key).await? else {
         return Ok(None);
     };
     Ok(serde_json::from_value(row.data)?)
 }
 
-pub fn secret_value(db: &dyn Database, board_id: &str, name: &str) -> anyhow::Result<Option<String>> {
-    let Some(secret) = secret_get(db, board_id, name)? else {
+pub async fn secret_value(db: &dyn Database, name: &str) -> anyhow::Result<Option<String>> {
+    let Some(secret) = secret_get(db, name).await? else {
         return Ok(None);
     };
     let pt = decrypt_value(&secret.value_encrypted)?;
     Ok(Some(String::from_utf8(pt)?))
 }
 
-pub fn secret_remove(db: &mut dyn Database, board_id: &str, name: &str) -> anyhow::Result<()> {
-    db.delete(TABLE_APP_SECRETS, &secret_filter(board_id, &name.to_uppercase()))?;
+pub async fn secret_remove(db: &mut dyn Database, name: &str) -> anyhow::Result<()> {
+    db.delete(TABLE_APP_SECRETS, &secret_filter(&name.to_uppercase())).await?;
     Ok(())
 }
 
-pub fn secrets_map(db: &dyn Database, board_id: &str) -> anyhow::Result<HashMap<String, String>> {
+pub async fn secrets_map(db: &dyn Database) -> anyhow::Result<HashMap<String, String>> {
     let mut map = HashMap::new();
-    for s in secret_query(db, board_id)? {
+    for s in secret_query(db).await? {
         if let Ok(pt) = decrypt_value(&s.value_encrypted) {
             if let Ok(text) = String::from_utf8(pt) {
                 map.insert(s.name, text);

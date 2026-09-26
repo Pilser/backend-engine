@@ -17,29 +17,17 @@ impl Key {
     }
 }
 
+/// Single-tenant app config. One row per deployment (see `tenant_config`).
+/// Board-level leftovers (`owner_key`, per-app schema/computed/…, board-wide
+/// TTL) were deleted in the single-tenant collapse: schema/computed/validate/
+/// redact/TTL live per table, and there is no owner.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Board {
-    pub board_id: String,
-    pub owner_key: String,
+pub struct Tenant {
     pub title: String,
-    #[serde(default)]
-    pub schema_json: Option<Json>,
     #[serde(default)]
     pub public_reads: bool,
     #[serde(default)]
-    pub unique_key: Option<String>,
-    #[serde(default)]
-    pub computed_json: Option<Json>,
-    #[serde(default)]
-    pub validate_json: Option<Json>,
-    #[serde(default)]
-    pub redact_json: Option<Json>,
-    #[serde(default)]
     pub rate_json: Option<Json>,
-    #[serde(default)]
-    pub ttl_seconds: Option<i64>,
-    #[serde(default)]
-    pub ttl_field: Option<String>,
     #[serde(default)]
     pub audit: bool,
     #[serde(default)]
@@ -50,7 +38,6 @@ pub struct Board {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TableConfig {
-    pub board_id: String,
     pub table: String,
     #[serde(default)]
     pub schema_json: Option<Json>,
@@ -87,7 +74,6 @@ pub struct Record {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KeyRecord {
     pub bucket: String,
-    pub board_id: String,
     pub key_hash: String,
     #[serde(default)]
     pub salt: String,
@@ -125,7 +111,6 @@ pub struct Secret {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Job {
-    pub board_id: String,
     pub name: String,
     pub schedule: String,
     pub action: Json,
@@ -142,7 +127,6 @@ pub struct Job {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JobRun {
-    pub board_id: String,
     pub job_name: String,
     pub triggered_at: String,
     pub duration_ms: i64,
@@ -167,7 +151,6 @@ pub struct Link {
 /// "{slug}/index.html").
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubApp {
-    pub board_id: String,
     pub slug: String,
     #[serde(default)]
     pub title: Option<String>,

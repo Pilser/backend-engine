@@ -3,28 +3,25 @@ use engine::model::Principal;
 use engine::ServerlessEngine;
 use serde_json::{json, Value as Json};
 
-pub fn add(
+pub async fn add(
     engine: &mut ServerlessEngine,
     _principal: &Principal,
     arguments: &Json,
 ) -> Result<Json, String> {
-    let board = arg_str(arguments, "board")?;
     let name = arg_str(arguments, "name")?;
     let schedule = arg_str(arguments, "schedule")?;
     let action = arguments.get("action").cloned().unwrap_or(Json::Null);
-    engine
-        .add_job(board, name, schedule, &action)
+    engine.add_job(name, schedule, &action).await
         .map_err(|e| e.to_string())?;
     ok(json!({ "name": name, "schedule": schedule }))
 }
 
-pub fn list(
+pub async fn list(
     engine: &ServerlessEngine,
     _principal: &Principal,
-    arguments: &Json,
+    _arguments: &Json,
 ) -> Result<Json, String> {
-    let board = arg_str(arguments, "board")?;
-    let jobs = engine.list_jobs(board).map_err(|e| e.to_string())?;
+    let jobs = engine.list_jobs().await.map_err(|e| e.to_string())?;
     let out: Vec<Json> = jobs
         .into_iter()
         .map(|j| {
@@ -41,17 +38,15 @@ pub fn list(
     ok(json!({ "jobs": out }))
 }
 
-pub fn show(
+pub async fn show(
     engine: &ServerlessEngine,
     _principal: &Principal,
     arguments: &Json,
 ) -> Result<Json, String> {
-    let board = arg_str(arguments, "board")?;
     let name = arg_str(arguments, "name")?;
-    let job = engine
-        .get_job(board, name)
+    let job = engine.get_job(name).await
         .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("job '{name}' not found on board {board}"))?;
+        .ok_or_else(|| format!("job '{name}' not found"))?;
     ok(json!({
         "name": job.name,
         "schedule": job.schedule,
@@ -64,27 +59,24 @@ pub fn show(
     }))
 }
 
-pub fn remove(
+pub async fn remove(
     engine: &mut ServerlessEngine,
     _principal: &Principal,
     arguments: &Json,
 ) -> Result<Json, String> {
-    let board = arg_str(arguments, "board")?;
     let name = arg_str(arguments, "name")?;
-    let removed = engine.remove_job(board, name).map_err(|e| e.to_string())?;
+    let removed = engine.remove_job(name).await.map_err(|e| e.to_string())?;
     ok(json!({ "removed": removed }))
 }
 
-pub fn runs(
+pub async fn runs(
     engine: &ServerlessEngine,
     _principal: &Principal,
     arguments: &Json,
 ) -> Result<Json, String> {
-    let board = arg_str(arguments, "board")?;
     let job = arguments.get("job").and_then(|j| j.as_str());
     let limit = arg_i64(arguments, "limit", 20).clamp(1, 500) as usize;
-    let runs = engine
-        .job_runs(board, job, limit)
+    let runs = engine.job_runs(job, limit).await
         .map_err(|e| e.to_string())?;
     let out: Vec<Json> = runs
         .into_iter()

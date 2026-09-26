@@ -49,6 +49,8 @@ and `WORKER-PORT-GUIDE.md` for the port map.
 
 ## Status
 
-Port in progress. Engine core: done and tested. Worker adapters (`crates/worker`: D1/R2
-backends, fetch router, scheduled triggers, TenantDO): next — see `WORKER-PORT-GUIDE.md`
-§5. CI builds the deploy binary; nothing is hand-uploaded.
+Port complete, pending live verification. Engine core: single-tenant, async,
+tested. Worker shell (`crates/worker`): D1/R2 adapters, full fetch router,
+Cron + Queue pipeline, `TenantDO` — all compiling warning-free to wasm.
+CI builds the deploy binary; nothing is hand-uploaded. Live test matrix:
+`PORT-TRACK.md` Phase 8. Remaining follow-up: realtime WS/SSE fan-out.

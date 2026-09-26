@@ -20,7 +20,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check --workspace --locked
+      # serverless-worker (the Worker shell) is wasm-only — it cannot check
+      # natively; it is covered by the wasm-gate job below.
+      - run: cargo check --workspace --exclude serverless-worker --locked
+      # Tests run in CI only — local agents verify with `cargo check` (AGENTS.md).
+      - run: cargo test --workspace --exclude serverless-worker --locked
 
   wasm-gate:
     # The edge binary must not pull server runtimes. Fails the build early
@@ -33,18 +37,21 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check -p engine --target wasm32-unknown-unknown --locked
-      - name: forbidden crates in worker graph
+      - run: cargo check -p engine -p mcp --target wasm32-unknown-unknown --locked
+      - run: cargo check -p serverless-worker --target wasm32-unknown-unknown --locked
+      - name: forbidden crates in our code's graph
+        # engine + mcp must be runtime-free. The serverless-worker shell is
+        # checked separately: tokio there is worker's own wasm-shimmed copy,
+        # so only hyper/reqwest/bcrypt/jsonschema/jsonwebtoken are forbidden.
         run: |
-          if [ -f crates/worker/Cargo.toml ]; then
-            PKG="-p worker"
-          else
-            PKG="-p engine"
-          fi
-          TREE=$(cargo tree --target wasm32-unknown-unknown -e no-dev $PKG 2>/dev/null || true)
+          TREE=$(cargo tree --target wasm32-unknown-unknown -e no-dev -p engine -p mcp 2>/dev/null || true)
           echo "$TREE" | grep -Ei ' (tokio|hyper|reqwest|bcrypt|jsonschema|jsonwebtoken) v' \
             && { echo "::error::forbidden crate in WASM graph (see WORKER-PORT-GUIDE.md §3)"; exit 1; } \
-            || echo "WASM graph clean."
+            || echo "engine/mcp WASM graph clean."
+          TREE_W=$(cargo tree --target wasm32-unknown-unknown -e no-dev -p serverless-worker 2>/dev/null || true)
+          echo "$TREE_W" | grep -Ei ' (hyper|reqwest|bcrypt|jsonschema|jsonwebtoken) v' \
+            && { echo "::error::forbidden crate in worker shell graph (see WORKER-PORT-GUIDE.md §3)"; exit 1; } \
+            || echo "worker shell WASM graph clean."
       - name: wasm size gate (engine lib, early signal)
         run: |
           ls -la target/wasm32-unknown-unknown/debug/*.wasm 2>/dev/null || echo "no wasm lib yet (ok until worker crate lands)"
@@ -64,12 +71,23 @@ jobs:
       - name: build
         if: hashFiles('crates/worker/Cargo.toml') != ''
         run: worker-build --release
+      - name: wasm size gate (64 MiB Workers limit)
+        if: hashFiles('crates/worker/Cargo.toml') != ''
+        run: |
+          WASM=$(ls build/serverless-worker/*.wasm | head -1)
+          SIZE=$(stat -c%s "$WASM")
+          echo "wasm: $WASM ($SIZE bytes)"
+          if [ "$SIZE" -gt 62914560 ]; then
+            echo "::error::wasm $SIZE bytes exceeds the 64 MiB Workers limit"; exit 1;
+          elif [ "$SIZE" -gt 31457280 ]; then
+            echo "::warning::wasm $SIZE bytes exceeds the 30 MiB warn threshold (see WORKER-PORT-GUIDE.md §3)";
+          fi
       - name: upload worker-dist
         if: hashFiles('crates/worker/Cargo.toml') != ''
         uses: actions/upload-artifact@v4
         with:
           name: worker-dist
           path: |
-            build/worker/shim.mjs
-            build/worker/*.wasm
+            build/serverless-worker/shim.mjs
+            build/serverless-worker/*.wasm
           if-no-files-found: error

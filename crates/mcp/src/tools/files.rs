@@ -4,18 +4,17 @@ use engine::model::Principal;
 use engine::ServerlessEngine;
 use serde_json::{json, Value as Json};
 
-pub fn list(
+pub async fn list(
     engine: &ServerlessEngine,
     _principal: &Principal,
     arguments: &Json,
 ) -> Result<Json, String> {
-    let board = arg_str(arguments, "board")?;
     let slug = arguments.get("slug").and_then(|s| s.as_str());
     let no_subapps = arguments.get("no_subapps").and_then(|b| b.as_bool()).unwrap_or(false);
-    let files = engine.list_assets(board).map_err(|e| e.to_string())?;
+    let files = engine.list_assets().await.map_err(|e| e.to_string())?;
     // Registered sub-app prefixes (to exclude when asking for main only).
     let subs: Vec<String> = if no_subapps && slug.is_none() {
-        engine.list_subapps(board).map_err(|e| e.to_string())?.into_iter().map(|s| s.slug).collect()
+        engine.list_subapps().await.map_err(|e| e.to_string())?.into_iter().map(|s| s.slug).collect()
     } else {
         Vec::new()
     };
@@ -33,18 +32,17 @@ pub fn list(
     ok(json!({ "files": out }))
 }
 
-pub fn export(
+pub async fn export(
     engine: &ServerlessEngine,
     _principal: &Principal,
     arguments: &Json,
 ) -> Result<Json, String> {
-    let board = arg_str(arguments, "board")?;
     let slug = arguments.get("slug").and_then(|s| s.as_str());
-    let files = engine.list_assets(board).map_err(|e| e.to_string())?;
+    let files = engine.list_assets().await.map_err(|e| e.to_string())?;
     // Main-dist export excludes every registered sub-app prefix; --slug
     // exports exactly that sub-app.
     let subs: Vec<String> = if slug.is_none() {
-        engine.list_subapps(board).map_err(|e| e.to_string())?.into_iter().map(|s| s.slug).collect()
+        engine.list_subapps().await.map_err(|e| e.to_string())?.into_iter().map(|s| s.slug).collect()
     } else {
         Vec::new()
     };
@@ -58,8 +56,7 @@ pub fn export(
         if !include {
             continue;
         }
-        let (bytes, _ct) = engine
-            .get_asset(board, rel)
+        let (bytes, _ct) = engine.get_asset(rel).await
             .map_err(|e| e.to_string())?
             .ok_or_else(|| format!("asset '{rel}' missing"))?;
         let rel_clean = match slug {
@@ -75,20 +72,18 @@ pub fn export(
     ok(json!({ "slug": slug, "files": out }))
 }
 
-pub fn import(
+pub async fn import(
     engine: &mut ServerlessEngine,
     _principal: &Principal,
     arguments: &Json,
 ) -> Result<Json, String> {
-    let board = arg_str(arguments, "board")?;
     let slug = arguments.get("slug").and_then(|s| s.as_str());
     let files = arguments
         .get("files")
         .and_then(|f| f.as_array())
         .ok_or_else(|| "missing 'files' array [{path, content_base64}]".to_string())?;
     if let Some(s) = slug {
-        engine
-            .put_subapp(board, s, arguments.get("title").and_then(|t| t.as_str()), None)
+        engine.put_subapp(s, arguments.get("title").and_then(|t| t.as_str()), None).await
             .map_err(|e| e.to_string())?;
     }
     let mut imported = 0usize;
@@ -108,18 +103,17 @@ pub fn import(
             Some(s) => format!("{s}/{path}"),
             None => path.to_string(),
         };
-        engine.put_asset(board, &rel, &bytes).map_err(|e| e.to_string())?;
+        engine.put_asset(&rel, &bytes).await.map_err(|e| e.to_string())?;
         imported += 1;
     }
     ok(json!({ "slug": slug, "imported": imported }))
 }
 
-pub fn put(
+pub async fn put(
     engine: &mut ServerlessEngine,
     _principal: &Principal,
     arguments: &Json,
 ) -> Result<Json, String> {
-    let board = arg_str(arguments, "board")?;
     let path = arg_str(arguments, "path")?;
     let content = arguments
         .get("content")
@@ -127,30 +121,27 @@ pub fn put(
         .unwrap_or("");
     let slug = arguments.get("slug").and_then(|s| s.as_str());
     // When a slug is given, the path is relative to the sub-app and the
-    // sub-app is auto-registered (upsert) so /srv/{board}/{slug} serves it.
+    // sub-app is auto-registered (upsert) so /srv/{slug} serves it.
     let rel = match slug {
         Some(s) => format!("{s}/{path}"),
         None => path.to_string(),
     };
     if let Some(s) = slug {
-        engine
-            .put_subapp(board, s, arguments.get("title").and_then(|t| t.as_str()), None)
+        engine.put_subapp(s, arguments.get("title").and_then(|t| t.as_str()), None).await
             .map_err(|e| e.to_string())?;
     }
-    engine
-        .put_asset(board, &rel, content.as_bytes())
+    engine.put_asset(&rel, content.as_bytes()).await
         .map_err(|e| e.to_string())?;
     ok(json!({ "asset": rel, "bytes": content.len(), "slug": slug }))
 }
 
-pub fn get(
+pub async fn get(
     engine: &ServerlessEngine,
     _principal: &Principal,
     arguments: &Json,
 ) -> Result<Json, String> {
-    let board = arg_str(arguments, "board")?;
     let path = arg_str(arguments, "path")?;
-    let Some((bytes, content_type)) = engine.get_asset(board, path).map_err(|e| e.to_string())?
+    let Some((bytes, content_type)) = engine.get_asset(path).await.map_err(|e| e.to_string())?
     else {
         return Err(format!("asset '{path}' not found"));
     };
@@ -161,12 +152,11 @@ pub fn get(
     }))
 }
 
-pub fn upload(
+pub async fn upload(
     engine: &mut ServerlessEngine,
     _principal: &Principal,
     arguments: &Json,
 ) -> Result<Json, String> {
-    let board = arg_str(arguments, "board")?;
     let filename = arguments.get("filename").and_then(|f| f.as_str()).unwrap_or("upload").to_string();
     let table = arguments.get("table").and_then(|t| t.as_str()).unwrap_or("files").to_string();
     let folder = arguments.get("folder").and_then(|f| f.as_str());
@@ -176,24 +166,22 @@ pub fn upload(
         .decode(b64)
         .map_err(|e| format!("bad base64: {e}"))?;
     let meta = json!({ "name": filename, "type": content_type });
-    let seq = engine
-        .upload(&board, &table, &filename, &content_type, &bytes, &meta, folder)
+    let seq = engine.upload(&table, &filename, &content_type, &bytes, &meta, folder).await
         .map_err(|e| e.to_string())?;
     ok(json!({ "seq": seq, "table": table, "folder": folder, "bytes": bytes.len() }))
 }
 
-pub fn delete(
+pub async fn delete(
     engine: &ServerlessEngine,
     _principal: &Principal,
     arguments: &Json,
 ) -> Result<Json, String> {
-    let board = arg_str(arguments, "board")?;
     let path = arg_str(arguments, "path")?;
     // --slug <name> targets a file inside a sub-app without typing the prefix.
     let rel = match arguments.get("slug").and_then(|s| s.as_str()) {
         Some(s) => format!("{s}/{path}"),
         None => path.to_string(),
     };
-    let deleted = engine.delete_asset(board, &rel).map_err(|e| e.to_string())?;
+    let deleted = engine.delete_asset(&rel).await.map_err(|e| e.to_string())?;
     ok(json!({ "asset": rel, "deleted": deleted }))
 }

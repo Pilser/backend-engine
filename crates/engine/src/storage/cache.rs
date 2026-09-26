@@ -2,6 +2,7 @@ use crate::model::Key;
 use crate::storage::database::{Cursor, Database, DatabaseCaps, Query, Row, TtlClause};
 use crate::storage::ir::{FilterCond, SrvFilter};
 use crate::storage::object_store::{BlobMeta, KeyInfo, ObjectStore, ObjectStoreCaps, PutInfo};
+use async_trait::async_trait;
 use serde_json::Value as Json;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, VecDeque};
@@ -158,6 +159,7 @@ impl CachedDatabase {
     }
 }
 
+#[async_trait(?Send)]
 impl Database for CachedDatabase {
     fn adapter(&self) -> &'static str {
         "cached"
@@ -167,45 +169,45 @@ impl Database for CachedDatabase {
         self.inner.capabilities()
     }
 
-    fn insert(&mut self, table: &str, row: Row) -> anyhow::Result<i64> {
-        let seq = self.inner.insert(table, row)?;
+    async fn insert(&mut self, table: &str, row: Row) -> anyhow::Result<i64> {
+        let seq = self.inner.insert(table, row).await?;
         self.invalidate_table(table);
         Ok(seq)
     }
 
-    fn bulk_insert(&mut self, table: &str, rows: Vec<Row>) -> anyhow::Result<Vec<i64>> {
-        let seqs = self.inner.bulk_insert(table, rows)?;
+    async fn bulk_insert(&mut self, table: &str, rows: Vec<Row>) -> anyhow::Result<Vec<i64>> {
+        let seqs = self.inner.bulk_insert(table, rows).await?;
         self.invalidate_table(table);
         Ok(seqs)
     }
 
-    fn get(&self, table: &str, pk: &Key) -> anyhow::Result<Option<Row>> {
+    async fn get(&self, table: &str, pk: &Key) -> anyhow::Result<Option<Row>> {
         let ck = format!("{table}::k::{}", key_repr(pk));
         if let Some(Cached::Row(row)) = self.cache_get(&ck) {
             return Ok(Some(row));
         }
-        let row = self.inner.get(table, pk)?;
+        let row = self.inner.get(table, pk).await?;
         if let Some(r) = &row {
             self.cache_put(&ck, Cached::Row(r.clone()), row_ttl(&r.data));
         }
         Ok(row)
     }
 
-    fn update(&mut self, table: &str, pk: &Key, patch: &Json) -> anyhow::Result<()> {
-        self.inner.update(table, pk, patch)?;
+    async fn update(&mut self, table: &str, pk: &Key, patch: &Json) -> anyhow::Result<()> {
+        self.inner.update(table, pk, patch).await?;
         self.invalidate_table(table);
         Ok(())
     }
 
-    fn delete(&mut self, table: &str, filter: &SrvFilter) -> anyhow::Result<usize> {
-        let n = self.inner.delete(table, filter)?;
+    async fn delete(&mut self, table: &str, filter: &SrvFilter) -> anyhow::Result<usize> {
+        let n = self.inner.delete(table, filter).await?;
         self.invalidate_table(table);
         Ok(n)
     }
 
-    fn query(&self, table: &str, q: &Query) -> anyhow::Result<Cursor> {
+    async fn query(&self, table: &str, q: &Query) -> anyhow::Result<Cursor> {
         if q.ttl.is_some() {
-            return self.inner.query(table, q);
+            return self.inner.query(table, q).await;
         }
         let ck = query_hash(table, q);
 
@@ -218,7 +220,7 @@ impl Database for CachedDatabase {
         let slot: InflightSlot = {
             let mut m = match self.inflight.lock() {
                 Ok(g) => g,
-                Err(_) => return self.inner.query(table, q), // poisoned: degrade to no-coalescing
+                Err(_) => return self.inner.query(table, q).await, // poisoned: degrade to no-coalescing
             };
             m.entry(ck.clone())
                 .or_insert_with(|| Arc::new((Mutex::new(None), Condvar::new())))
@@ -227,12 +229,12 @@ impl Database for CachedDatabase {
         let (cell, cv) = &*slot;
         let cell_guard = match cell.lock() {
             Ok(g) => g,
-            Err(_) => return self.inner.query(table, q),
+            Err(_) => return self.inner.query(table, q).await,
         };
         if cell_guard.is_none() {
             // We are the leader: run the query WITH the cell lock held so
             // followers wait here instead of stampeding the backend.
-            let result = self.inner.query(table, q);
+            let result = self.inner.query(table, q).await;
             {
                 let mut st = cell_guard;
                 *st = Some(result.as_ref().map_err(|e| e.to_string()).map(|c| c.clone()));
@@ -268,16 +270,16 @@ impl Database for CachedDatabase {
 
         // Leader failed or timed out: last resort, query directly (no
         // re-registration — avoids thundering-herd recursion).
-        self.inner.query(table, q)
+        self.inner.query(table, q).await
     }
 
-    fn upsert(&mut self, table: &str, key: &str, row: Row) -> anyhow::Result<i64> {
-        let seq = self.inner.upsert(table, key, row)?;
+    async fn upsert(&mut self, table: &str, key: &str, row: Row) -> anyhow::Result<i64> {
+        let seq = self.inner.upsert(table, key, row).await?;
         self.invalidate_table(table);
         Ok(seq)
     }
 
-    fn link(
+    async fn link(
         &mut self,
         board: &str,
         from: i64,
@@ -285,14 +287,14 @@ impl Database for CachedDatabase {
         to: i64,
         props: &Json,
     ) -> anyhow::Result<i64> {
-        self.inner.link(board, from, label, to, props)
+        self.inner.link(board, from, label, to, props).await
     }
 
-    fn link_batch(&mut self, board: &str, edges: &[(i64, String, i64)]) -> anyhow::Result<Vec<i64>> {
-        self.inner.link_batch(board, edges)
+    async fn link_batch(&mut self, board: &str, edges: &[(i64, String, i64)]) -> anyhow::Result<Vec<i64>> {
+        self.inner.link_batch(board, edges).await
     }
 
-    fn traverse(
+    async fn traverse(
         &self,
         board: &str,
         from: i64,
@@ -300,10 +302,10 @@ impl Database for CachedDatabase {
         dir: &str,
         depth: usize,
     ) -> anyhow::Result<Cursor> {
-        self.inner.traverse(board, from, label, dir, depth)
+        self.inner.traverse(board, from, label, dir, depth).await
     }
 
-    fn search_edges(
+    async fn search_edges(
         &self,
         board: &str,
         label: &str,
@@ -311,30 +313,30 @@ impl Database for CachedDatabase {
         query: &str,
         limit: usize,
     ) -> anyhow::Result<Cursor> {
-        self.inner.search_edges(board, label, property, query, limit)
+        self.inner.search_edges(board, label, property, query, limit).await
     }
 
-    fn unlink(&mut self, board: &str, edge_id: i64) -> anyhow::Result<bool> {
-        self.inner.unlink(board, edge_id)
+    async fn unlink(&mut self, board: &str, edge_id: i64) -> anyhow::Result<bool> {
+        self.inner.unlink(board, edge_id).await
     }
 
-    fn delete_node(&mut self, board: &str, node_id: i64) -> anyhow::Result<usize> {
-        self.inner.delete_node(board, node_id)
+    async fn delete_node(&mut self, board: &str, node_id: i64) -> anyhow::Result<usize> {
+        self.inner.delete_node(board, node_id).await
     }
 
-    fn begin(&mut self, board: &str) -> anyhow::Result<()> {
-        self.inner.begin(board)
+    async fn begin(&mut self, board: &str) -> anyhow::Result<()> {
+        self.inner.begin(board).await
     }
 
-    fn commit(&mut self, board: &str) -> anyhow::Result<()> {
-        self.inner.commit(board)
+    async fn commit(&mut self, board: &str) -> anyhow::Result<()> {
+        self.inner.commit(board).await
     }
 
-    fn rollback(&mut self, board: &str) -> anyhow::Result<()> {
-        self.inner.rollback(board)
+    async fn rollback(&mut self, board: &str) -> anyhow::Result<()> {
+        self.inner.rollback(board).await
     }
 
-    fn aggregate(
+    async fn aggregate(
         &self,
         table: &str,
         board: &str,
@@ -346,19 +348,14 @@ impl Database for CachedDatabase {
         ttl: Option<TtlClause>,
     ) -> anyhow::Result<Vec<Json>> {
         // Route through query() so aggregates get BOTH the result cache AND
-        // singleflight coalescing (10 identical concurrent counts previously
-        // fired 10 separate Helix scans; now they share one). The board/table
-        // routing conds are required for tenant-scoped backends (Helix).
+        // singleflight coalescing. The table routing cond scopes the scan;
+        // (the old board cond is gone with stored board_id fields).
         // Tradeoff: loses the adapter's server-side aggregate_by pushdown;
         // acceptable while admission control bounds concurrency.
+        let _ = board;
         let q = Query {
             filter: SrvFilter {
                 conds: vec![
-                    FilterCond {
-                        field: "$.board_id".to_string(),
-                        op: crate::storage::ir::Op::Eq,
-                        value: Json::String(board.to_string()),
-                    },
                     FilterCond {
                         field: "$.table".to_string(),
                         op: crate::storage::ir::Op::Eq,
@@ -371,21 +368,21 @@ impl Database for CachedDatabase {
             offset: 0,
             ttl: ttl.clone(),
         };
-        let cursor = self.query(table, &q)?;
+        let cursor = self.query(table, &q).await?;
         crate::storage::database::aggregate_rows(&cursor.rows, filter, agg, field, group_by, ttl)
     }
 
     /// Seq allocation must reach the real backend (it owns the atomic
     /// counter). A new seq implies new rows are possible; invalidate the
     /// records table so stale count/list caches don't hide them.
-    fn allocate_seqs(&mut self, board: &str, table: &str, n: i64) -> anyhow::Result<i64> {
-        let first = self.inner.allocate_seqs(board, table, n)?;
+    async fn allocate_seqs(&mut self, board: &str, table: &str, n: i64) -> anyhow::Result<i64> {
+        let first = self.inner.allocate_seqs(board, table, n).await?;
         self.invalidate_table(crate::tables::TABLE_RECORDS);
         Ok(first)
     }
 
-    fn count_records(&self, board: &str) -> anyhow::Result<i64> {
-        self.inner.count_records(board)
+    async fn count_records(&self, board: &str) -> anyhow::Result<i64> {
+        self.inner.count_records(board).await
     }
 }
 
@@ -466,9 +463,10 @@ impl CachedObjectStore {
     }
 }
 
+#[async_trait(?Send)]
 impl ObjectStore for CachedObjectStore {
-    fn put(&self, key: &str, bytes: &[u8]) -> anyhow::Result<PutInfo> {
-        let info = self.inner.put(key, bytes)?;
+    async fn put(&self, key: &str, bytes: &[u8]) -> anyhow::Result<PutInfo> {
+        let info = self.inner.put(key, bytes).await?;
         if self.cacheable(info.size) {
             self.cache_put(key, bytes.to_vec());
         } else {
@@ -477,11 +475,11 @@ impl ObjectStore for CachedObjectStore {
         Ok(info)
     }
 
-    fn get(&self, key: &str) -> anyhow::Result<Option<Vec<u8>>> {
+    async fn get(&self, key: &str) -> anyhow::Result<Option<Vec<u8>>> {
         if let Some(bytes) = self.cache_get(key) {
             return Ok(Some(bytes));
         }
-        let bytes = self.inner.get(key)?;
+        let bytes = self.inner.get(key).await?;
         if let Some(b) = &bytes {
             if self.cacheable(b.len() as u64) {
                 self.cache_put(key, b.clone());
@@ -490,18 +488,18 @@ impl ObjectStore for CachedObjectStore {
         Ok(bytes)
     }
 
-    fn head(&self, key: &str) -> anyhow::Result<Option<BlobMeta>> {
-        self.inner.head(key)
+    async fn head(&self, key: &str) -> anyhow::Result<Option<BlobMeta>> {
+        self.inner.head(key).await
     }
 
-    fn delete(&self, key: &str) -> anyhow::Result<()> {
-        self.inner.delete(key)?;
+    async fn delete(&self, key: &str) -> anyhow::Result<()> {
+        self.inner.delete(key).await?;
         self.invalidate(key);
         Ok(())
     }
 
-    fn list(&self, prefix: &str) -> anyhow::Result<Vec<KeyInfo>> {
-        self.inner.list(prefix)
+    async fn list(&self, prefix: &str) -> anyhow::Result<Vec<KeyInfo>> {
+        self.inner.list(prefix).await
     }
 
     fn capabilities(&self) -> ObjectStoreCaps {

@@ -3,11 +3,11 @@ use engine::model::Principal;
 use engine::ServerlessEngine;
 use serde_json::{json, Value as Json};
 
-/// `endpoints.list` — the platform API surface a board's front-end relies on.
+/// `endpoints.list` — the platform API surface a front-end or agent relies on.
 ///
-/// These routes are compiled into the server binary (same for every board),
-/// not stored per-app, so this tool documents the contract rather than reading
-/// a config row.
+/// Single tenant: one Worker serves one app, so there is no `{board}` segment
+/// anywhere. These routes are compiled into the worker binary, not stored
+/// per-app, so this tool documents the contract rather than reading config.
 pub fn list(
     _engine: &ServerlessEngine,
     _principal: &Principal,
@@ -22,66 +22,88 @@ pub fn list(
         return Err("dir must be one of: asc | desc".into());
     }
     let mut endpoints: Vec<Json> = [
-        ("GET", "/api/srv/{board}", "App info"),
-        ("DELETE", "/api/srv/{board}", "Delete app"),
-        ("PATCH", "/api/srv/{board}/app", "Update app config"),
-        ("GET", "/api/srv/{board}/resources", "Usage/rates/resources"),
-        ("GET", "/api/srv/{board}/tables", "List tables"),
-        ("POST", "/api/srv/{board}/tables", "Create table"),
-        ("GET", "/api/srv/{board}/tables/{table}", "Show table config"),
-        ("DELETE", "/api/srv/{board}/tables/{table}", "Delete table"),
-        ("POST", "/api/srv/{board}/tables/{table}/submit", "Insert record"),
-        ("POST", "/api/srv/{board}/tables/{table}/bulk", "Bulk insert"),
-        ("POST", "/api/srv/{board}/tables/{table}/import", "Import json/csv"),
-        ("GET", "/api/srv/{board}/tables/{table}/records", "List records"),
-        ("DELETE", "/api/srv/{board}/tables/{table}/records", "Delete records (filter)"),
-        ("GET", "/api/srv/{board}/tables/{table}/query", "Filter records"),
-        ("GET", "/api/srv/{board}/tables/{table}/aggregate", "Aggregate (sum/avg/...)"),
-        ("GET", "/api/srv/{board}/tables/{table}/record", "Get one record by seq/query"),
-        ("PUT", "/api/srv/{board}/tables/{table}/records/{seq}", "Put (upsert) record"),
-        ("PATCH", "/api/srv/{board}/tables/{table}/records/{seq}", "Patch record"),
-        ("DELETE", "/api/srv/{board}/tables/{table}/records/{seq}", "Delete record"),
-        ("POST", "/api/srv/{board}/auth/signup", "Create user"),
-        ("POST", "/api/srv/{board}/auth/login", "Login (session token + jwt)"),
-        ("POST", "/api/srv/{board}/auth/logout", "Logout"),
-        ("POST", "/api/srv/{board}/auth/role", "Set role"),
-        ("GET", "/api/srv/{board}/auth/me", "Resolve session"),
-        ("GET", "/api/srv/{board}/auth/oauth/microsoft/start", "Microsoft SSO start"),
-        ("GET", "/api/srv/{board}/auth/oauth/microsoft/callback", "Microsoft SSO callback"),
-        ("POST", "/api/srv/{board}/upload", "Upload file"),
-        ("GET", "/api/srv/{board}/file", "Download file"),
-        ("POST", "/api/srv/{board}/call", "Outbound HTTP call"),
-        ("POST", "/api/srv/{board}/events", "Inbound webhook/event"),
-        ("GET", "/api/srv/{board}/events", "SSE event stream (realtime)"),
-        ("GET", "/api/srv/{board}/keys", "List keys"),
-        ("POST", "/api/srv/{board}/keys", "Issue key"),
-        ("DELETE", "/api/srv/{board}/keys", "Revoke key"),
-        ("GET", "/api/srv/{board}/jobs", "List jobs"),
-        ("POST", "/api/srv/{board}/jobs", "Add job"),
-        ("DELETE", "/api/srv/{board}/jobs", "Remove job"),
-        ("GET", "/api/srv/{board}/jobs/runs", "Job run history"),
-        ("GET", "/api/srv/{board}/recipes", "List recipes"),
-        ("POST", "/api/srv/{board}/recipes", "Add recipe"),
-        ("PATCH", "/api/srv/{board}/recipes/{name}", "Enable/disable recipe"),
-        ("DELETE", "/api/srv/{board}/recipes/{name}", "Remove recipe"),
-        ("GET", "/api/srv/{board}/secrets", "List secrets"),
-        ("POST", "/api/srv/{board}/secrets", "Set secret"),
-        ("DELETE", "/api/srv/{board}/secrets/{name}", "Delete secret"),
-        ("GET", "/api/srv/{board}/assets", "List assets"),
-        ("PUT", "/api/srv/{board}/assets/*", "Put asset"),
-        ("GET", "/api/srv/{board}/assets/*", "Get asset"),
-        ("DELETE", "/api/srv/{board}/assets/*", "Delete asset"),
+        ("GET", "/api/app", "App info (tenant config)"),
+        ("PATCH", "/api/app", "Update tenant config (title, public_reads)"),
+        ("GET", "/api/resources", "Usage: records, storage bytes, rate limits"),
+        ("POST", "/api/auth/signup", "Create user"),
+        ("POST", "/api/auth/login", "Login (session token + jwt)"),
+        ("POST", "/api/auth/logout", "Logout"),
+        ("POST", "/api/auth/role", "Set role (admin)"),
+        ("GET", "/api/auth/me", "Resolve session"),
+        ("GET", "/api/auth/oauth/start", "SSO login start (redirects to provider)"),
+        ("GET", "/api/auth/oauth/callback", "SSO callback (session + redirect)"),
+        ("GET", "/api/tables", "List tables"),
+        ("POST", "/api/tables", "Create table"),
+        ("GET", "/api/tables/{table}", "Show table config"),
+        ("DELETE", "/api/tables/{table}", "Delete table"),
+        ("POST", "/api/tables/{table}/submit", "Insert record (?upsert=1)"),
+        ("POST", "/api/tables/{table}/bulk", "Bulk insert (?upsert=1, ?migrate=1)"),
+        ("POST", "/api/tables/{table}/import", "Import json/csv"),
+        ("GET", "/api/tables/{table}/records", "List records"),
+        ("DELETE", "/api/tables/{table}/records", "Delete records (?filter=, no scoped keys)"),
+        ("GET", "/api/tables/{table}/query", "Filter records (?filter, ?order, ?q, ?hl)"),
+        ("GET", "/api/tables/{table}/aggregate", "Aggregate (?op, ?field, ?group)"),
+        ("GET", "/api/recipes/{name}", "Show one recipe"),
+        ("PUT", "/api/tables/{table}/records/{seq}", "Replace record"),
+        ("PATCH", "/api/tables/{table}/records/{seq}", "Patch record"),
+        ("DELETE", "/api/tables/{table}/records/{seq}", "Delete record"),
+        ("POST", "/api/upload", "Upload file (raw bytes, X-Filename, ?table=, ?folder=)"),
+        ("GET", "/api/file", "Download file (?file=, ?table=)"),
+        ("POST", "/api/call", "Outbound HTTP call (admin)"),
+        ("POST", "/api/events", "Inbound webhook/event (HMAC)"),
+        ("GET", "/api/events", "Realtime stream — 501 until TenantDO fan-out"),
+        ("GET", "/api/keys", "List keys"),
+        ("POST", "/api/keys", "Issue key"),
+        ("DELETE", "/api/keys", "Revoke key (?bucket=)"),
+        ("GET", "/api/hooks", "List webhooks"),
+        ("POST", "/api/hooks", "Register webhook"),
+        ("DELETE", "/api/hooks", "Remove webhook (?url=)"),
+        ("GET", "/api/hooks/deliveries", "Due delivery queue"),
+        ("GET", "/api/jobs", "List jobs"),
+        ("POST", "/api/jobs", "Add job"),
+        ("DELETE", "/api/jobs", "Remove job (?name=)"),
+        ("GET", "/api/jobs/runs", "Job run history"),
+        ("GET", "/api/recipes", "List recipes"),
+        ("POST", "/api/recipes", "Add recipe"),
+        ("PATCH", "/api/recipes/{name}", "Enable/disable recipe"),
+        ("DELETE", "/api/recipes/{name}", "Remove recipe"),
+        ("GET", "/api/secrets", "List secrets"),
+        ("POST", "/api/secrets", "Set secret"),
+        ("DELETE", "/api/secrets/{name}", "Delete secret"),
+        ("PUT", "/api/rate", "Set rate config"),
+        ("PUT", "/api/ttl", "Set table TTL"),
+        ("DELETE", "/api/ttl", "Clear table TTL (?table=)"),
+        ("PUT", "/api/link", "Set table link"),
+        ("DELETE", "/api/link", "Clear link"),
+        ("PUT", "/api/audit", "Enable/disable audit"),
+        ("GET", "/api/audit", "Query audit"),
+        ("PUT", "/api/computed", "Set computed (?table=)"),
+        ("DELETE", "/api/computed", "Clear computed (?table=)"),
+        ("PUT", "/api/validate", "Set validation (?table=)"),
+        ("DELETE", "/api/validate", "Clear validation (?table=)"),
+        ("PUT", "/api/redact", "Set redaction (?table=)"),
+        ("DELETE", "/api/redact", "Clear redaction (?table=)"),
+        ("PUT", "/api/webhook_secret", "Set inbound secret (≥16 chars)"),
+        ("DELETE", "/api/webhook_secret", "Clear inbound secret"),
+        ("GET", "/api/config", "Aggregate tenant snapshot"),
+        ("GET", "/api/assets", "List assets"),
+        ("PUT", "/api/assets/*", "Put asset"),
+        ("GET", "/api/assets/*", "Get asset"),
+        ("DELETE", "/api/assets/*", "Delete asset"),
+        ("POST", "/mcp", "MCP JSON-RPC (tools/call) or {\"command\"} CLI mode"),
+        ("GET", "/mcp", "Setup sheet (no command) or CLI-over-URL (?command=)"),
     ]
     .iter()
     .map(|(m, p, d)| json!({ "method": m, "path": p, "desc": d }))
     .collect();
 
     let mut non_api: Vec<Json> = [
-        ("GET", "/srv/{board}/", "SPA hosting: front-end dist (index.html + assets/*)"),
-        ("GET", "/srv/{board}/ai/*", "AI assistant proxy → AI_BASE_URL target"),
-        ("GET", "/srv/{board}/ai/ws", "AI assistant WebSocket tunnel → target /ws"),
-        ("GET", "/ws", "Legacy root WS → env SRV_AI_TARGET /ws"),
-        ("GET", "/api/system/health", "Host health ('School VPS Node' widget)"),
+        ("ANY", "/srv/ai/*", "AI assistant reverse proxy (HTML/JS rewritten to mount)"),
+        ("WS", "/srv/ai/ws", "AI assistant socket (framed bridge to upstream /ws)"),
+        ("WS", "/ws", "Legacy AI socket (AI bundle dials host-root /ws)"),
+        ("GET", "/srv/", "SPA hosting: front-end dist (index.html + assets/*, sub-app slugs)"),
+        ("GET", "/api/system/health", "Worker health (version, tenant, D1 probe)"),
+        ("GET", "/api/version", "Build version"),
         ("GET", "/healthz", "Liveness"),
     ]
     .iter()
@@ -105,16 +127,11 @@ pub fn list(
     ok(json!({
         "endpoints": endpoints,
         "non_api_routes": non_api,
-        "ai_proxy": {
-            "mount": "/srv/{board}/ai/",
-            "target_source": "board secret AI_BASE_URL (fallback: env SRV_AI_TARGET)",
-            "ws": { "board_mount": "/srv/{board}/ai/ws", "legacy": "/ws" }
+        "auth": {
+            "admin": "WORKER_KEY bearer (secret binding) — full access, never in the DB",
+            "keys": "POST /api/keys (admin) issues reader/writer/customer keys; ?key= works like a bearer",
+            "public_reads": "tenant flag (PATCH /api/app) allows anonymous reads",
         },
-        "sso": {
-            "provider": "microsoft",
-            "secrets_used": ["MICROSOFT_CLIENT_ID", "MICROSOFT_CLIENT_SECRET", "MICROSOFT_TENANT_ID"],
-            "routes": ["/api/srv/{board}/auth/oauth/microsoft/start", "/api/srv/{board}/auth/oauth/microsoft/callback"]
-        },
-        "realtime": { "sse": "/api/srv/{board}/events?after={seq}" }
+        "realtime": { "sse": "GET /api/events is 501 until the TenantDO fan-out lands" }
     }))
 }

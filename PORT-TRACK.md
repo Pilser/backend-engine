@@ -231,6 +231,18 @@ curl -H "$K" -X POST $BASE/api/secrets -d '{"name":"OAUTH_CLIENT_ID","value":"<i
 - [x] fixed adjacent leak: MCP `keys.show` exposed `key_hash`/`salt`
 - [x] tests updated; native + `--tests` + wasm green, graphs clean
 
+## CI incident log (2026-09-26)
+
+- First green-ish signal: `wasm-gate` ✅ passed on the big port push.
+- `native-check` ❌ on the first-ever `cargo test` run: pre-existing
+  `expr::tests::ternary_is_right_associative` expected `1.0`, evaluator
+  correctly returns `1` (suite convention: ints stay ints). Fixed the test
+  (not the evaluator) + added a real associativity assertion.
+- Next run: all 24 lib tests pass, then 36 s of silence and an EXTERNAL
+  cancel (no `running N tests`, no FAILED — cargo never spawned the next
+  binary, so no test hung or failed). Re-ran failed jobs; if it recurs,
+  suspect runner preemption, not code.
+
 ## Decisions log
 
 - 2026-09-26: keep chrono defaults (`wasmbind` gives `js_sys::Date` on wasm); do NOT follow guide §3's `time`-crate advice — it would break wasm (decision from wasm-dep survey).

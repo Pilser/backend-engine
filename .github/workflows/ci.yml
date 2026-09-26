@@ -16,6 +16,9 @@ env:
 jobs:
   native-check:
     runs-on: ubuntu-latest
+    # A real hang must fail fast with a timeout (not burn 6h or die
+    # mysteriously); infra flakes show as cancels, which we re-run.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -31,6 +34,7 @@ jobs:
     # if anyone re-adds tokio/hyper/reqwest/bcrypt/jsonschema to the
     # worker's dependency graph (see WORKER-PORT-GUIDE.md §3).
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -59,6 +63,8 @@ jobs:
   worker-build:
     # Produces the binary Cloudflare runs. Skipped until crates/worker lands.
     runs-on: ubuntu-latest
+    # LTO wasm links are slow; cap the wait so a stuck build fails loudly.
+    timeout-minutes: 45
     needs: [native-check, wasm-gate]
     steps:
       - uses: actions/checkout@v4

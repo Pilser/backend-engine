@@ -1,0 +1,58 @@
+# Publish: build the worker binary and ship it to npm on version tags.
+# Trigger: git tag vX.Y.Z && git push origin vX.Y.Z
+# Required GitHub Secret: NPM_TOKEN (npm access token with publish rights).
+# First-time setup: confirm the name in npm/package.json is free
+# (rename there + in npm/README.md if taken), add NPM_TOKEN, push a tag.
+
+name: Publish
+
+on:
+  push:
+    tags: ["v*"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  npm-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install worker-build --locked
+      - name: build release binary
+        run: worker-build --release
+      - name: assemble npm package
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          DIST="build/serverless-worker"
+          ls "$DIST/shim.mjs" "$DIST"/*.wasm
+          python3 - "$DIST" "$VERSION" <<'EOF'
+          import json, sys
+          dist, version = sys.argv[1], sys.argv[2]
+          for f in ("package.json", "README.md", "wrangler.example.toml"):
+              src = open(f"npm/{f}").read()
+              open(f"{dist}/{f}", "w").write(src)
+          pkg = f"{dist}/package.json"
+          data = json.load(open(pkg))
+          data["version"] = version
+          json.dump(data, open(pkg, "w"), indent=2)
+          print("stamped version", version)
+          EOF
+      - name: wasm size gate (64 MiB Workers limit)
+        run: |
+          WASM=$(ls build/serverless-worker/*.wasm | head -1)
+          SIZE=$(stat -c%s "$WASM")
+          echo "wasm: $WASM ($SIZE bytes)"
+          [ "$SIZE" -gt 62914560 ] && { echo "::error::wasm exceeds 64 MiB"; exit 1; }
+      - name: publish to npm (also serves bun: bunx/bun add use npm registry)
+        working-directory: build/serverless-worker
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          printf '//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}\n' > ~/.npmrc
+          npm publish --access public

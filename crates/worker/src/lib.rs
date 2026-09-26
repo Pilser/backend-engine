@@ -17,9 +17,9 @@ pub mod http_caller;
 pub mod query;
 pub mod queue;
 pub mod r2_store;
-mod router;
+pub mod router;
 pub mod scheduled;
-mod tenant_do;
+pub mod tenant_do;
 
 use worker::{
     event, Context, Env, Request, Response, Result, ScheduleContext, ScheduledEvent,

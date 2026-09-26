@@ -8,6 +8,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [lib]
+# cdylib = what worker-build compiles into the shippable npm binary.
 crate-type = ["cdylib"]
 
 [dependencies]

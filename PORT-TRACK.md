@@ -231,6 +231,21 @@ curl -H "$K" -X POST $BASE/api/secrets -d '{"name":"OAUTH_CLIENT_ID","value":"<i
 - [x] fixed adjacent leak: MCP `keys.show` exposed `key_hash`/`salt`
 - [x] tests updated; native + `--tests` + wasm green, graphs clean
 
+## Plugin-native program (2026-09-27) — email + plugins in-engine
+
+- Phase 1 (done): `$send_email` recipe action (resend|mailchannels via
+  MAIL_* secrets, result on `$.email_result`) + `email send` CLI +
+  `POST /api/email/send`. No SMTP (no TCP from WASM by design).
+- Phase 2 (done): `#[event(email)]` inbound → `email_log` table +
+  `email.received` recipes. Routing is dashboard config, not code.
+- Phase 3 (done): plugin manifest standard (`docs/PLUGINS.md`) +
+  installer (namespaced tables, auto-prefixed recipes/jobs, idempotent) +
+  `plugins` CLI group + `/api/plugins*` REST.
+- Phase 4 (done): route bindings `ANY /api/plugin/{slug}/{route}`
+  (query/get/submit/aggregate, base filter ANDs caller filter).
+- Wall (documented): arbitrary `worker.js` execution can never run inside
+  workerd (platform rule) — manifests replace it; raw SMTP/IMAP out.
+
 ## Rename (2026-09-27) — serverless-worker → backend-engine
 
 - Repo `Pilser/serverless-worker` → `Pilser/backend-engine` (redirect kept).

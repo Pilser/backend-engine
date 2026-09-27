@@ -80,6 +80,8 @@ provision infrastructure today.
 | Keys, users, sessions | Scoped API auth without a login server |
 | Files + assets | Blob storage on R2 |
 | Webhooks in/out | HMAC-signed delivery with retries |
+| Email out/in | `$send_email` (resend/mailchannels) + `email.received` recipes |
+| Native plugins | Manifest installs tables + recipes + jobs + routes + mail (`docs/PLUGINS.md`) |
 | TTL, links, audit | Expiry, relations, immutable log |
 
 Full inventory: [`docs/FEATURES.md`](docs/FEATURES.md). Big picture: [`docs/OVERVIEW.md`](docs/OVERVIEW.md).

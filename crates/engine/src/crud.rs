@@ -261,6 +261,7 @@ pub async fn table_create(
         public_read: None,
         write_only: None,
         allow_anon_submit: None,
+        max_rows: None,
     };
     db.insert(TABLE_TABLES, Row::new(Key::text(key), serde_json::to_value(&cfg)?)).await?;
     Ok(cfg)

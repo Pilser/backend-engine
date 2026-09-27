@@ -70,6 +70,11 @@ pub struct TableConfig {
     /// table while reads follow the read policy. `write_only` implies it.
     #[serde(default)]
     pub allow_anon_submit: Option<bool>,
+    /// Keep-last-N trim (S3: P2 abuse controls): after each sweep, oldest
+    /// rows beyond this count are dropped. Spam/inbox tables stay bounded
+    /// without manual cleanup.
+    #[serde(default)]
+    pub max_rows: Option<i64>,
 }
 
 impl TableConfig {
@@ -86,6 +91,26 @@ impl TableConfig {
     /// standalone `allow_anon_submit` knob.
     pub fn anon_submit_open(&self) -> bool {
         self.write_only.unwrap_or(false) || self.allow_anon_submit.unwrap_or(false)
+    }
+
+    /// P2 audit answer (S3): what ANONYMOUS callers can and cannot do on
+    /// this table, given the tenant default. Read the answer instead of
+    /// scraping: misconfigurations become visible before attackers do.
+    pub fn access_audit(&self, tenant_public: bool) -> Json {
+        let reads = ["list", "get", "query", "search", "aggregate"];
+        let mut anon_can: Vec<&str> = Vec::new();
+        let mut anon_cannot: Vec<&str> = Vec::new();
+        if self.anon_read_open(tenant_public) {
+            anon_can.extend(reads);
+        } else {
+            anon_cannot.extend(reads);
+        }
+        if self.anon_submit_open() {
+            anon_can.push("submit");
+        } else {
+            anon_cannot.push("submit");
+        }
+        serde_json::json!({ "anon_can": anon_can, "anon_cannot": anon_cannot })
     }
 }
 

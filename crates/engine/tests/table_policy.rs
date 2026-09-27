@@ -20,6 +20,7 @@ fn cfg(public_read: Option<bool>, write_only: Option<bool>) -> TableConfig {
         public_read,
         write_only,
         allow_anon_submit: None,
+        max_rows: None,
     }
 }
 
@@ -81,6 +82,73 @@ fn email_format() {
         assert!(e.insert_record("contacts", json!({"email": "not-an-email"}), None, false, &p).await.is_err());
         assert!(e.insert_record("contacts", json!({"email": "a@b"}), None, false, &p).await.is_err());
     });
+}
+
+#[test]
+fn unset_strips_fields() {
+    block_on(async {
+        let mut e = ServerlessEngine::with_defaults();
+        let p = engine::model::Principal {
+            id: "t".into(),
+            role: "owner".into(),
+            scope: None,
+            writer: None,
+            tables: None,
+        };
+        e.create_table("forms", None, None).await.unwrap();
+        e.add_recipe(&engine::model::Recipe {
+            name: "strip".into(),
+            when_json: json!({"event": "record.created", "table": "forms"}),
+            match_json: None,
+            enabled: true,
+            dedup_on: None,
+            actions_json: Some(json!([{"$unset": ["$.approved", "$.role"]}])),
+            table: None,
+        })
+        .await
+        .unwrap();
+        let seq = e
+            .insert_record("forms", json!({"msg": "hi", "approved": true, "role": "admin"}), None, false, &p)
+            .await
+            .unwrap();
+        let rec = e.get_record("forms", seq).await.unwrap().unwrap();
+        assert_eq!(rec.payload.get("msg"), Some(&json!("hi")));
+        assert!(rec.payload.get("approved").is_none());
+        assert!(rec.payload.get("role").is_none());
+    });
+}
+
+#[test]
+fn max_rows_trims_oldest() {
+    block_on(async {
+        let mut e = ServerlessEngine::with_defaults();
+        let p = engine::model::Principal {
+            id: "t".into(),
+            role: "owner".into(),
+            scope: None,
+            writer: None,
+            tables: None,
+        };
+        e.create_table("log", None, None).await.unwrap();
+        e.set_table_policy("log", &json!({"max_rows": 2})).await.unwrap();
+        for i in 1..=4 {
+            e.insert_record("log", json!({"n": i}), None, false, &p).await.unwrap();
+        }
+        e.ttl_sweep().await.unwrap();
+        let rows = e.list_records("log", 50, None, 0, "asc").await.unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].payload["n"], json!(3));
+    });
+}
+
+#[test]
+fn access_audit_answers() {
+    let inbox = cfg(None, Some(true));
+    let a = inbox.access_audit(false);
+    assert!(a["anon_can"].as_array().unwrap().contains(&json!("submit")));
+    assert!(a["anon_cannot"].as_array().unwrap().contains(&json!("list")));
+    let open = cfg(Some(true), None);
+    assert!(open.access_audit(false)["anon_can"].as_array().unwrap().len() == 6);
 }
 
 #[test]

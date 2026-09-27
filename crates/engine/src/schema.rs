@@ -271,6 +271,7 @@ pub async fn policy_set(
     public_read: Option<&Json>,
     write_only: Option<&Json>,
     allow_anon_submit: Option<&Json>,
+    max_rows: Option<&Json>,
 ) -> anyhow::Result<()> {
     fn opt_bool(name: &str, v: &Json) -> anyhow::Result<Option<bool>> {
         if v.is_null() {
@@ -281,10 +282,24 @@ pub async fn policy_set(
             anyhow::bail!("\"{name}\" must be true, false, or null")
         }
     }
-    // None = untouched; Some(None) = clear; Some(Some(b)) = set.
+    fn opt_int(name: &str, v: &Json) -> anyhow::Result<Option<i64>> {
+        if v.is_null() {
+            Ok(None)
+        } else if let Some(n) = v.as_i64() {
+            if n <= 0 {
+                anyhow::bail!("\"{name}\" must be a positive integer or null")
+            } else {
+                Ok(Some(n))
+            }
+        } else {
+            anyhow::bail!("\"{name}\" must be a positive integer or null")
+        }
+    }
+    // None = untouched; Some(None) = clear; Some(Some(x)) = set.
     let pr = public_read.map(|v| opt_bool("public_read", v)).transpose()?;
     let wo = write_only.map(|v| opt_bool("write_only", v)).transpose()?;
     let an = allow_anon_submit.map(|v| opt_bool("allow_anon_submit", v)).transpose()?;
+    let mr = max_rows.map(|v| opt_int("max_rows", v)).transpose()?;
     save_table_config(db, table, |c| {
         if let Some(v) = pr {
             c.public_read = v;
@@ -294,6 +309,9 @@ pub async fn policy_set(
         }
         if let Some(v) = an {
             c.allow_anon_submit = v;
+        }
+        if let Some(v) = mr {
+            c.max_rows = v;
         }
     })
     .await

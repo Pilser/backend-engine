@@ -88,12 +88,12 @@ pub async fn tables_create(req: Request, ctx: RouteContext<()>) -> Result<Respon
     let unique_key = body.get("unique_key").and_then(|u| u.as_str());
     Ok(match app.engine.create_table(&table, schema, unique_key).await {
         Ok(cfg) => {
-            if body.get("public_read").is_some()
-                || body.get("write_only").is_some()
-                || body.get("allow_anon_submit").is_some()
+            if ["public_read", "write_only", "allow_anon_submit", "max_rows"]
+                .iter()
+                .any(|k| body.get(k).is_some())
             {
                 let mut patch = serde_json::Map::new();
-                for k in ["public_read", "write_only", "allow_anon_submit"] {
+                for k in ["public_read", "write_only", "allow_anon_submit", "max_rows"] {
                     if let Some(v) = body.get(k) {
                         patch.insert(k.into(), v.clone());
                     }
@@ -137,7 +137,7 @@ pub async fn tables_show(req: Request, ctx: RouteContext<()>) -> Result<Response
         Ok(t) => t,
         Err(r) => return Ok(r),
     };
-    let app = match ctx_with_scope(&req, &ctx).await {
+    let mut app = match ctx_with_scope(&req, &ctx).await {
         Ok(c) => c,
         Err(r) => return Ok(r),
     };
@@ -147,8 +147,13 @@ pub async fn tables_show(req: Request, ctx: RouteContext<()>) -> Result<Response
     if !app.principal.allows_table(&table) {
         return Ok(cors::gone("table not found"));
     }
+    let tenant_public = app.engine.tenant().await.map(|t| t.public_reads).unwrap_or(false);
     Ok(match app.engine.get_table(&table).await {
-        Ok(Some(cfg)) => cors::ok(json!({ "ok": true, "table": cfg })),
+        Ok(Some(cfg)) => {
+            let mut v = json!({ "ok": true, "table": cfg });
+            v["access"] = cfg.access_audit(tenant_public);
+            cors::ok(v)
+        }
         Ok(None) => cors::gone("table not found"),
         Err(e) => cors::srv(&e),
     })

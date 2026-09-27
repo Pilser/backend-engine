@@ -30,13 +30,18 @@ pub async fn list(
 }
 
 pub async fn show(
-    engine: &ServerlessEngine,
+    engine: &mut ServerlessEngine,
     _principal: &Principal,
     arguments: &Json,
 ) -> Result<Json, String> {
     let table = arg_str(arguments, "table")?;
     match engine.get_table(&table).await.map_err(|e| e.to_string())? {
-        Some(cfg) => ok(serde_json::to_value(&cfg).map_err(|e| e.to_string())?),
+        Some(cfg) => {
+            let tenant_public = engine.tenant().await.map(|t| t.public_reads).unwrap_or(false);
+            let mut v = serde_json::to_value(&cfg).map_err(|e| e.to_string())?;
+            v["access"] = cfg.access_audit(tenant_public);
+            ok(v)
+        }
         None => Err(format!("table '{table}' not found")),
     }
 }
@@ -76,6 +81,7 @@ pub async fn config(
             "public_read": cfg.public_read,
             "write_only": cfg.write_only,
             "allow_anon_submit": cfg.allow_anon_submit,
+            "max_rows": cfg.max_rows,
         }));
     }
     if let Some(v) = arguments.get("computed") {
@@ -94,12 +100,12 @@ pub async fn config(
         let field = arguments.get("ttl_field").and_then(|v| v.as_str());
         engine.set_ttl(&table, secs, field).await.map_err(|e| e.to_string())?;
     }
-    if arguments.get("public_read").is_some()
-        || arguments.get("write_only").is_some()
-        || arguments.get("allow_anon_submit").is_some()
+    if ["public_read", "write_only", "allow_anon_submit", "max_rows"]
+        .iter()
+        .any(|k| arguments.get(k).is_some())
     {
         let mut patch = serde_json::Map::new();
-        for k in ["public_read", "write_only", "allow_anon_submit"] {
+        for k in ["public_read", "write_only", "allow_anon_submit", "max_rows"] {
             if let Some(v) = arguments.get(k) {
                 patch.insert(k.into(), v.clone());
             }

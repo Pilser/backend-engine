@@ -830,8 +830,8 @@ impl ServerlessEngine {
         crate::schema::redact_set(self.db.as_mut(), table, paths).await
     }
 
-    /// Per-table access policy patch (S1+S2): `{public_read, write_only,
-    /// allow_anon_submit}` — absent leaves, null clears. Used by
+    /// Per-table policy patch (S1+S2+S3): `{public_read, write_only,
+    /// allow_anon_submit, max_rows}` — absent leaves, null clears. Used by
     /// `tables config` and `PATCH /api/tables/:table`.
     pub async fn set_table_policy(&mut self, table: &str, patch: &Json) -> anyhow::Result<()> {
         let empty = serde_json::Map::new();
@@ -842,6 +842,7 @@ impl ServerlessEngine {
             m.get("public_read"),
             m.get("write_only"),
             m.get("allow_anon_submit"),
+            m.get("max_rows"),
         )
         .await
     }

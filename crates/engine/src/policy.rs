@@ -39,8 +39,43 @@ pub async fn ttl_sweep(db: &mut dyn Database) -> anyhow::Result<usize> {
     let now = crate::crud::now_str();
     let mut total = 0usize;
     for cfg in crate::crud::table_list(db).await? {
-        if cfg.ttl_seconds.is_none() && cfg.ttl_field.is_none() {
+        if cfg.ttl_seconds.is_none() && cfg.ttl_field.is_none() && cfg.max_rows.is_none() {
             continue;
+        }
+        // Keep-last-N trim (S3): oldest rows beyond max_rows go, newest stay.
+        if let Some(max) = cfg.max_rows.filter(|m| *m > 0) {
+            for _ in 0..100 {
+                let count = crate::crud::record_count(db, &cfg.table).await?;
+                if count <= max {
+                    break;
+                }
+                let take = ((count - max).min(500)) as usize;
+                let q = Query {
+                    filter: SrvFilter { conds: vec![crate::crud::table_cond(&cfg.table)] },
+                    orders: vec![("$.seq".to_string(), false)],
+                    limit: take,
+                    offset: 0,
+                    ttl: None,
+                };
+                let mut seqs = Vec::new();
+                for row in db.query(TABLE_RECORDS, &q).await?.rows {
+                    let rec: Record = serde_json::from_value(row.data)?;
+                    seqs.push(rec.seq);
+                }
+                if seqs.is_empty() {
+                    break;
+                }
+                let filter = SrvFilter {
+                    conds: vec![
+                        crate::crud::table_cond(&cfg.table),
+                        FilterCond { field: "$.seq".to_string(), op: Op::In, value: Json::Array(seqs.into_iter().map(Json::from).collect()) },
+                    ],
+                };
+                total += db.delete(TABLE_RECORDS, &filter).await?;
+            }
+            if cfg.ttl_seconds.is_none() && cfg.ttl_field.is_none() {
+                continue;
+            }
         }
         let q = Query {
             filter: SrvFilter {

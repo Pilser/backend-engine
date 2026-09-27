@@ -558,25 +558,27 @@ pub fn subst_patch(v: Json, payload: &Json) -> anyhow::Result<Json> {
     }
 }
 
+/// Percent-encode one value for `application/x-www-form-urlencoded`.
+fn urlenc(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.as_bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*b as char);
+            }
+            b' ' => out.push('+'),
+            _ => out.push_str(&format!("%{:02X}", b)),
+        }
+    }
+    out
+}
+
 /// Percent-encode a `{k: v}` map into `application/x-www-form-urlencoded`.
 fn urlencode_form(form: &Json) -> String {
-    fn enc(s: &str) -> String {
-        let mut out = String::new();
-        for b in s.as_bytes() {
-            match b {
-                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                    out.push(*b as char);
-                }
-                b' ' => out.push('+'),
-                _ => out.push_str(&format!("%{:02X}", b)),
-            }
-        }
-        out
-    }
     let mut parts = Vec::new();
     if let Some(map) = form.as_object() {
         for (k, v) in map {
-            parts.push(format!("{}={}", enc(k), enc(&crate::storage::ir::scalar_text(v))));
+            parts.push(format!("{}={}", urlenc(k), urlenc(&crate::storage::ir::scalar_text(v))));
         }
     }
     parts.join("&")
@@ -876,6 +878,40 @@ async fn apply_action(
                 }),
             }
         }
+        // "$verify_turnstile": fail-closed bot check (S3: P2 abuse controls).
+        // POSTs {secret, response} to Cloudflare siteverify and bails unless
+        // {success: true}. Always executes inline (must block the recipe) —
+        // the secret comes from TURNSTILE_SECRET, the token templated from
+        // the payload (e.g. {"token": "{{$.token}}"}).
+        "$verify_turnstile" => {
+            let obj = val.as_object().ok_or_else(|| anyhow::anyhow!("$verify_turnstile must be an object"))?;
+            let secrets = crate::secrets::secrets_map(db).await?;
+            let secret = secrets
+                .get("TURNSTILE_SECRET")
+                .cloned()
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| anyhow::anyhow!("$verify_turnstile needs the TURNSTILE_SECRET secret"))?;
+            let token = subst_strings_str(
+                obj.get("token").and_then(|v| v.as_str()).ok_or_else(|| anyhow::anyhow!("$verify_turnstile needs \"token\""))?,
+                payload,
+            )?;
+            let body = crate::http::HttpBody::Raw {
+                content_type: "application/x-www-form-urlencoded".to_string(),
+                bytes: format!("secret={}&response={}", urlenc(&secret), urlenc(&token)).into_bytes(),
+            };
+            let (status, resp) = crate::http::http_call_body(
+                "https://challenges.cloudflare.com/turnstile/v0/siteverify",
+                &[],
+                &body,
+                15_000,
+            )
+            .await?;
+            if status != 200 || resp.get("success").and_then(|v| v.as_bool()).unwrap_or(false) == false {
+                logs.push(format!("turnstile rejected (HTTP {status})"));
+                anyhow::bail!("turnstile verification failed");
+            }
+            logs.push("turnstile ok".to_string());
+        }
         "$format" => {
             let obj = val.as_object().ok_or_else(|| anyhow::anyhow!("$format must be an object"))?;
             let field = str_field(obj, "field")?;
@@ -971,6 +1007,19 @@ async fn apply_action(
             let obj = val.as_object().ok_or_else(|| anyhow::anyhow!("$set_state must be an object"))?;
             let state = obj.get("state").cloned().unwrap_or(Json::Null);
             set_at(payload, "state", state)?;
+        }
+        // "$unset": strip fields server-side (field-level write policy —
+        // clients may send anything, the recipe decides what survives).
+        //   {"$unset": "$.approved"} or {"$unset": ["$.a", "$.b"]}
+        "$unset" => {
+            let paths: Vec<&str> = match val {
+                Json::String(s) => vec![s.as_str()],
+                Json::Array(arr) => arr.iter().filter_map(|v| v.as_str()).collect(),
+                _ => anyhow::bail!("$unset must be a path string or array"),
+            };
+            for path in paths {
+                remove_at(payload, path);
+            }
         }
         "$schedule" => {
             let obj = val.as_object().ok_or_else(|| anyhow::anyhow!("$schedule must be an object"))?;

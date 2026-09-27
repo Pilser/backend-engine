@@ -22,7 +22,9 @@ what you see there is what the engine serves after deploy.
 **Build is not deploy.** `bun run build` only compiles the frontend
 (`web/dist/`, git-ignored). `bun run deploy` builds AND copies the dist
 into the engine (`scripts/publish-frontend.sh` PUTs every file to
-`/api/assets/*`). Deploy reads config, it never guesses:
+`/api/assets/*`). Deploy reads config, it never guesses. Note: everything
+under `/srv/` is PUBLIC by design — never deploy secrets, exports, or keys
+in the frontend bundle (use scoped API keys instead):
 
 ```sh
 bun run deploy                                            # local defaults (dev key)

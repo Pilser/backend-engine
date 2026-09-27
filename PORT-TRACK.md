@@ -231,6 +231,23 @@ curl -H "$K" -X POST $BASE/api/secrets -d '{"name":"OAUTH_CLIENT_ID","value":"<i
 - [x] fixed adjacent leak: MCP `keys.show` exposed `key_hash`/`salt`
 - [x] tests updated; native + `--tests` + wasm green, graphs clean
 
+## Security program (2026-09-27) — user-reported gaps, all built
+
+- S1 (P0): per-table `public_read` (overrides tenant both ways) +
+  `write_only` tables (admin-only reads, anonymous submit). Enforced on
+  every record read/submit path incl. plugin routes; aggregate unified
+  under the same policy (was strict-reader even on public apps).
+- S2 (P1): `allow_anon_submit` standalone knob; table-scoped keys
+  (`tables` on KeyRecord → Principal, enforced on table reads/writes,
+  uploads, inventory); `format: email` in the schema allowlist.
+- S3 (P2): `$verify_turnstile` fail-closed recipe action
+  (TURNSTILE_SECRET); `max_rows` keep-last-N trim in the sweep;
+  `access` audit block in tables show/config (`anon_can/cannot`);
+  `$unset` for server-side field stripping. CORS allowlist SKIPPED
+  deliberately: token auth (no session cookies; only an OAuth
+  state cookie exists) makes `*` safe — documented, not coded.
+- Deferred (needs TenantDO layer): per-table per-IP rate limits.
+
 ## Vanishing-rows hunt (2026-09-27) — PROVEN: cross-table key collision
 
 - Symptom: rows disappeared hours after being served (plugin routes,

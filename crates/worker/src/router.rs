@@ -42,6 +42,7 @@ pub async fn run(req: Request, env: Env) -> Result<Response> {
         .get_async("/api/tables", tables::tables_list)
         .post_async("/api/tables", tables::tables_create)
         .get_async("/api/tables/:table", tables::tables_show)
+        .patch_async("/api/tables/:table", tables::tables_policy)
         .delete_async("/api/tables/:table", tables::tables_delete)
         .post_async("/api/tables/:table/submit", tables::submit)
         .post_async("/api/tables/:table/bulk", tables::bulk)

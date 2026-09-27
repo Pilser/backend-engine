@@ -829,6 +829,21 @@ impl ServerlessEngine {
         crate::schema::redact_set(self.db.as_mut(), table, paths).await
     }
 
+    /// Per-table access policy patch (S1): `{public_read, write_only}` —
+    /// absent leaves, null clears. Used by `tables config` and
+    /// `PATCH /api/tables/:table`.
+    pub async fn set_table_policy(&mut self, table: &str, patch: &Json) -> anyhow::Result<()> {
+        let empty = serde_json::Map::new();
+        let m = patch.as_object().unwrap_or(&empty);
+        crate::schema::policy_set(
+            self.db.as_mut(),
+            table,
+            m.get("public_read"),
+            m.get("write_only"),
+        )
+        .await
+    }
+
     pub async fn set_webhook_secret(&mut self, secret: Option<&str>) -> anyhow::Result<()> {
         crate::webhooks::webhook_secret_set(self.db.as_mut(), secret).await
     }

@@ -55,6 +55,34 @@ pub struct TableConfig {
     pub ttl_field: Option<String>,
     #[serde(default)]
     pub created_at: Option<String>,
+    /// Per-table read policy (S1: P0 proposals). None = inherit the tenant
+    /// `public_reads` flag. Some(true) = anonymous reads allowed on this
+    /// table's read endpoints; Some(false) = anonymous reads denied even
+    /// when the tenant is public.
+    #[serde(default)]
+    pub public_read: Option<bool>,
+    /// Write-only (append-only) table: reads need admin/owner, but submit
+    /// stays open (anonymous included) — the inbox shape (contact forms,
+    /// applications, reports).
+    #[serde(default)]
+    pub write_only: Option<bool>,
+}
+
+impl TableConfig {
+    /// Anonymous-read rule (pure, unit-tested): write-only tables never
+    /// open; otherwise the table override wins, else the tenant default.
+    pub fn anon_read_open(&self, tenant_public: bool) -> bool {
+        if self.write_only.unwrap_or(false) {
+            return false;
+        }
+        self.public_read.unwrap_or(tenant_public)
+    }
+
+    /// Anonymous-submit rule: open only on write-only tables for now
+    /// (S2 adds the standalone `allow_anon_submit` knob).
+    pub fn anon_submit_open(&self) -> bool {
+        self.write_only.unwrap_or(false)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -73,6 +73,8 @@ pub async fn config(
             "redact": cfg.redact_json,
             "ttl_seconds": cfg.ttl_seconds,
             "ttl_field": cfg.ttl_field,
+            "public_read": cfg.public_read,
+            "write_only": cfg.write_only,
         }));
     }
     if let Some(v) = arguments.get("computed") {
@@ -90,6 +92,16 @@ pub async fn config(
         let secs = arguments.get("ttl_seconds").and_then(|v| v.as_i64());
         let field = arguments.get("ttl_field").and_then(|v| v.as_str());
         engine.set_ttl(&table, secs, field).await.map_err(|e| e.to_string())?;
+    }
+    if arguments.get("public_read").is_some() || arguments.get("write_only").is_some() {
+        let mut patch = serde_json::Map::new();
+        if let Some(v) = arguments.get("public_read") {
+            patch.insert("public_read".into(), v.clone());
+        }
+        if let Some(v) = arguments.get("write_only") {
+            patch.insert("write_only".into(), v.clone());
+        }
+        engine.set_table_policy(&table, &Json::Object(patch)).await.map_err(|e| e.to_string())?;
     }
     ok(serde_json::json!({ "table": table, "updated": true }))
 }

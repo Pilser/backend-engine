@@ -35,6 +35,7 @@ pub fn list(
         ("GET", "/api/tables", "List tables"),
         ("POST", "/api/tables", "Create table"),
         ("GET", "/api/tables/{table}", "Show table config"),
+        ("PATCH", "/api/tables/{table}", "Table access policy: public_read, write_only (admin)"),
         ("DELETE", "/api/tables/{table}", "Delete table"),
         ("POST", "/api/tables/{table}/submit", "Insert record (?upsert=1)"),
         ("POST", "/api/tables/{table}/bulk", "Bulk insert (?upsert=1, ?migrate=1)"),

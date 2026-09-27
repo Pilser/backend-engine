@@ -240,6 +240,38 @@ pub async fn validate_set(
     save_table_config(db, table, |c| c.validate_json = rules).await
 }
 
+/// Per-table access policy (S1: P0 proposals). Each knob: absent leaves the
+/// current value, explicit null clears it (public_read→inherit tenant,
+/// write_only→false), true/false sets it. Anything else is rejected.
+pub async fn policy_set(
+    db: &mut dyn Database,
+    table: &str,
+    public_read: Option<&Json>,
+    write_only: Option<&Json>,
+) -> anyhow::Result<()> {
+    fn opt_bool(name: &str, v: &Json) -> anyhow::Result<Option<bool>> {
+        if v.is_null() {
+            Ok(None)
+        } else if let Some(b) = v.as_bool() {
+            Ok(Some(b))
+        } else {
+            anyhow::bail!("\"{name}\" must be true, false, or null")
+        }
+    }
+    // None = untouched; Some(None) = clear; Some(Some(b)) = set.
+    let pr = public_read.map(|v| opt_bool("public_read", v)).transpose()?;
+    let wo = write_only.map(|v| opt_bool("write_only", v)).transpose()?;
+    save_table_config(db, table, |c| {
+        if let Some(v) = pr {
+            c.public_read = v;
+        }
+        if let Some(v) = wo {
+            c.write_only = v;
+        }
+    })
+    .await
+}
+
 pub async fn redact_set(
     db: &mut dyn Database,
     table: &str,

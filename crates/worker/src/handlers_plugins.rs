@@ -124,12 +124,8 @@ pub async fn call(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     }
     match op {
         "query" | "aggregate" => {
-            if op == "query" {
-                if !auth::can_read(&mut app).await {
-                    return Ok(cors::deny("private app"));
-                }
-            } else if !auth::require_read(&app.principal) {
-                return Ok(cors::deny("reader authorization required"));
+            if !auth::can_table_read(&mut app, &table).await {
+                return Ok(cors::deny("private app"));
             }
             if op == "aggregate" {
                 let agg = match engine::storage::ir::Agg::parse(p.get("op").map(|s| s.as_str()).unwrap_or("count")) {
@@ -174,8 +170,8 @@ pub async fn call(req: Request, ctx: RouteContext<()>) -> Result<Response> {
             })
         }
         "get" => {
-            if !auth::require_read(&app.principal) {
-                return Ok(cors::deny("reader authorization required"));
+            if !auth::can_table_read(&mut app, &table).await {
+                return Ok(cors::deny("private app"));
             }
             let seq: i64 = match p.get("seq").and_then(|s| s.parse().ok()) {
                 Some(n) => n,
@@ -188,7 +184,7 @@ pub async fn call(req: Request, ctx: RouteContext<()>) -> Result<Response> {
             })
         }
         "submit" => {
-            if !auth::require_write(&app.principal) {
+            if !auth::can_table_submit(&app, &table).await {
                 return Ok(cors::deny("writer authorization required"));
             }
             let payload = match body_json_for(req, MAX_JSON).await {

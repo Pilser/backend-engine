@@ -163,6 +163,53 @@ pub async fn can_read(ctx: &mut Ctx) -> bool {
     ctx.engine.tenant().await.map(|t| t.public_reads).unwrap_or(false)
 }
 
+/// Per-table read gate (S1: P0 proposals). Precedence: admin/owner always;
+/// `write_only` tables deny everyone else; table `public_read` overrides
+/// the tenant flag; otherwise the tenant rule. Unknown tables fall back to
+/// the tenant rule (callers 404 on missing tables first).
+pub async fn can_table_read(ctx: &mut Ctx, table: &str) -> bool {
+    let admin = matches!(ctx.principal.role.as_str(), "admin" | "owner");
+    if admin {
+        return true;
+    }
+    let reader = require_read(&ctx.principal);
+    let cfg = ctx.engine.get_table(table).await.unwrap_or(None);
+    match cfg {
+        Some(c) => {
+            if reader {
+                // Keyed readers bypass write_only (admin-only reads still
+                // apply below); writers/admins pass through require_*.
+                if !c.write_only.unwrap_or(false) {
+                    return true;
+                }
+                return false;
+            }
+            c.anon_read_open(ctx.engine.tenant().await.map(|t| t.public_reads).unwrap_or(false))
+        }
+        None => {
+            if reader {
+                true
+            } else {
+                ctx.engine.tenant().await.map(|t| t.public_reads).unwrap_or(false)
+            }
+        }
+    }
+}
+
+/// Submit gate (S1): writers/admins always; `write_only` tables additionally
+/// allow anonymous submit (the inbox shape: insert without list).
+pub async fn can_table_submit(ctx: &Ctx, table: &str) -> bool {
+    if require_write(&ctx.principal) {
+        return true;
+    }
+    ctx.engine
+        .get_table(table)
+        .await
+        .unwrap_or(None)
+        .map(|c| c.anon_submit_open())
+        .unwrap_or(false)
+}
+
 /// Customer-scoped ownership check against a record payload: scoped callers
 /// only see their own rows (documented intent; the donor's helper for this
 /// was dead code).

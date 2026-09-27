@@ -80,7 +80,45 @@ pub async fn tables_create(req: Request, ctx: RouteContext<()>) -> Result<Respon
     let schema = body.get("schema").cloned();
     let unique_key = body.get("unique_key").and_then(|u| u.as_str());
     Ok(match app.engine.create_table(&table, schema, unique_key).await {
-        Ok(cfg) => cors::created(json!({ "ok": true, "table": cfg })),
+        Ok(cfg) => {
+            if body.get("public_read").is_some() || body.get("write_only").is_some() {
+                let mut patch = serde_json::Map::new();
+                if let Some(v) = body.get("public_read") {
+                    patch.insert("public_read".into(), v.clone());
+                }
+                if let Some(v) = body.get("write_only") {
+                    patch.insert("write_only".into(), v.clone());
+                }
+                if let Err(e) = app.engine.set_table_policy(&table, &Json::Object(patch)).await {
+                    return Ok(cors::bad(&e));
+                }
+            }
+            cors::created(json!({ "ok": true, "table": cfg }))
+        }
+        Err(e) => cors::bad(&e),
+    })
+}
+
+/// PATCH /api/tables/:table — per-table access policy (S1: P0 proposals).
+/// Body `{public_read, write_only}`: absent leaves, null clears.
+pub async fn tables_policy(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let table = match table_param(&ctx) {
+        Ok(t) => t,
+        Err(r) => return Ok(r),
+    };
+    let mut app = match ctx_with_scope(&req, &ctx).await {
+        Ok(c) => c,
+        Err(r) => return Ok(r),
+    };
+    if !auth::require_admin(&app.principal) {
+        return Ok(cors::deny("admin authorization required"));
+    }
+    let body = match body_json(req, MAX_JSON).await {
+        Ok(b) => b,
+        Err(r) => return Ok(r),
+    };
+    Ok(match app.engine.set_table_policy(&table, &body).await {
+        Ok(()) => cors::ok(json!({ "ok": true, "table": table, "updated": true })),
         Err(e) => cors::bad(&e),
     })
 }
@@ -136,7 +174,7 @@ pub async fn submit(req: Request, ctx: RouteContext<()>) -> Result<Response> {
         Ok(c) => c,
         Err(r) => return Ok(r),
     };
-    if !auth::require_write(&app.principal) {
+    if !auth::can_table_submit(&app, &table).await {
         return Ok(cors::deny("writer authorization required"));
     }
     let payload = match body_json(req, MAX_JSON).await {
@@ -162,7 +200,7 @@ pub async fn bulk(req: Request, ctx: RouteContext<()>) -> Result<Response> {
         Ok(c) => c,
         Err(r) => return Ok(r),
     };
-    if !auth::require_write(&app.principal) {
+    if !auth::can_table_submit(&app, &table).await {
         return Ok(cors::deny("writer authorization required"));
     }
     let body = match body_json(req, MAX_BULK).await {
@@ -194,7 +232,7 @@ pub async fn import_records(req: Request, ctx: RouteContext<()>) -> Result<Respo
         Ok(c) => c,
         Err(r) => return Ok(r),
     };
-    if !auth::require_write(&app.principal) {
+    if !auth::can_table_submit(&app, &table).await {
         return Ok(cors::deny("writer authorization required"));
     }
     let body = match body_json(req, MAX_BULK).await {
@@ -221,7 +259,7 @@ pub async fn list_records(req: Request, ctx: RouteContext<()>) -> Result<Respons
         Ok(c) => c,
         Err(r) => return Ok(r),
     };
-    if !auth::can_read(&mut app).await {
+    if !auth::can_table_read(&mut app, &table).await {
         return Ok(cors::deny("private app"));
     }
     let limit = query::limit(&p, "limit", 50, 200);
@@ -244,7 +282,7 @@ pub async fn query_records(req: Request, ctx: RouteContext<()>) -> Result<Respon
         Ok(c) => c,
         Err(r) => return Ok(r),
     };
-    if !auth::can_read(&mut app).await {
+    if !auth::can_table_read(&mut app, &table).await {
         return Ok(cors::deny("private app"));
     }
     let limit = query::limit(&p, "limit", 50, 500);
@@ -287,12 +325,12 @@ pub async fn aggregate_records(req: Request, ctx: RouteContext<()>) -> Result<Re
         Err(r) => return Ok(r),
     };
     let p = query::params(&req);
-    let app = match ctx_with_scope(&req, &ctx).await {
+    let mut app = match ctx_with_scope(&req, &ctx).await {
         Ok(c) => c,
         Err(r) => return Ok(r),
     };
-    if !auth::require_read(&app.principal) {
-        return Ok(cors::deny("reader authorization required"));
+    if !auth::can_table_read(&mut app, &table).await {
+        return Ok(cors::deny("private app"));
     }
     let agg = match engine::storage::ir::Agg::parse(p.get("op").map(|s| s.as_str()).unwrap_or("count")) {
         Ok(a) => a,

@@ -872,6 +872,8 @@ pub fn registry() -> Vec<CommandSpec> {
             FlagSpec { name: "ttl_seconds".into(), r#type: FlagType::Int, default: None, allowed: vec![], repeatable: false, help: "Auto-expire records after N seconds.".into(), conflicts: vec![], requires: vec![] },
             FlagSpec { name: "ttl_field".into(), r#type: FlagType::Str, default: None, allowed: vec![], repeatable: false, help: "Payload path holding an expiry timestamp.".into(), conflicts: vec![], requires: vec![] },
             FlagSpec { name: "clear_ttl".into(), r#type: FlagType::Bool, default: None, allowed: vec![], repeatable: false, help: "Clear the whole TTL.".into(), conflicts: vec![], requires: vec![] },
+            FlagSpec { name: "public_read".into(), r#type: FlagType::Bool, default: None, allowed: vec![], repeatable: false, help: "Anonymous reads on this table (overrides tenant public_reads).".into(), conflicts: vec![], requires: vec![] },
+            FlagSpec { name: "write_only".into(), r#type: FlagType::Bool, default: None, allowed: vec![], repeatable: false, help: "Reads need admin; submit stays open incl. anonymous (inbox shape).".into(), conflicts: vec![], requires: vec![] },
         ],
         body_json: None,
         response: serde_json::json!({ "ok": true, "table": "learners", "updated": true }),

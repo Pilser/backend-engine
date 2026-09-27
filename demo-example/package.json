@@ -1,5 +1,5 @@
 {
-  "name": "serverless-worker-demo",
+  "name": "serverless-worker-demo-example",
   "version": "0.1.0",
   "private": true,
   "description": "Example app: a full backend via @pilser/serverless-worker — no backend code.",

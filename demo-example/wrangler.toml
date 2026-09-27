@@ -2,7 +2,7 @@
 # Fill in the REPLACE_ME values, then: npm run deploy
 # Full walkthrough in ./README.md.
 
-name = "demo"
+name = "demo-example"
 main = "node_modules/@pilser/serverless-worker/index.js"
 compatibility_date = "2026-09-01"
 
@@ -12,21 +12,21 @@ command = "echo 'prebuilt binary — nothing to compile'"
 [vars]
 ENVIRONMENT = "production"
 HTTP_TIMEOUT_MS = "15000"
-WORKER_URL = "https://demo.REPLACE_ME_ACCOUNT.workers.dev"
+WORKER_URL = "https://demo-example.REPLACE_ME_ACCOUNT.workers.dev"
 AI_TARGET = ""
 
 # Storage = bindings, not URLs. Create once, paste ids here:
-#   wrangler d1 create demo
-#   wrangler r2 bucket create demo-store
-#   wrangler queues create demo-deliveries
+#   wrangler d1 create demo-example
+#   wrangler r2 bucket create demo-example-store
+#   wrangler queues create demo-example-deliveries
 [[d1_databases]]
 binding = "DB"
-database_name = "demo"
+database_name = "demo-example"
 database_id = "REPLACE_ME_RUN_WRANGLER_D1_CREATE"
 
 [[r2_buckets]]
 binding = "STORE"
-bucket_name = "demo-store"
+bucket_name = "demo-example-store"
 
 [[durable_objects.bindings]]
 name = "TENANT_DO"
@@ -37,11 +37,11 @@ tag = "v1"
 new_sqlite_classes = ["TenantDO"]
 
 [[queues.producers]]
-queue = "demo-deliveries"
+queue = "demo-example-deliveries"
 binding = "WEBHOOKS"
 
 [[queues.consumers]]
-queue = "demo-deliveries"
+queue = "demo-example-deliveries"
 max_batch_size = 10
 max_batch_timeout = 30
 

@@ -1,62 +1,54 @@
 import { useEffect, useState } from 'react'
+import { api, show, getKey, setKey } from './api.js'
+import Notes from './tabs/Notes.jsx'
+import Files from './tabs/Files.jsx'
+import Automate from './tabs/Automate.jsx'
+import Access from './tabs/Access.jsx'
+import Agent from './tabs/Agent.jsx'
 
-// Same origin when served from the engine (/srv/); override for `vite dev`.
-const ENGINE_URL = import.meta.env.VITE_ENGINE_URL ?? ''
-const API_KEY = import.meta.env.VITE_API_KEY ?? ''
-
-async function api(path, options = {}) {
-  const sep = path.includes('?') ? '&' : '?'
-  const res = await fetch(`${ENGINE_URL}${path}${sep}key=${API_KEY}`, {
-    headers: { 'Content-Type': 'application/json' },
-    ...options,
-  })
-  return res.json()
-}
+const TABS = { status: 'Status', notes: 'Tables', files: 'Files', automate: 'Automate', access: 'Access', agent: 'Agent' }
 
 export default function App() {
-  const [notes, setNotes] = useState([])
-  const [body, setBody] = useState('')
-  const [status, setStatus] = useState('connecting…')
+  const [tab, setTab] = useState('status')
+  const [info, setInfo] = useState(null)
+  const [key, setKeyState] = useState(getKey())
 
   async function refresh() {
-    try {
-      // The table IS the schema — creating it is one JSON call, no migration.
-      await api('/api/tables', { method: 'POST', body: JSON.stringify({ table: 'notes' }) })
-      const data = await api('/api/tables/notes/records')
-      setNotes(data.records ?? [])
-      setStatus('connected')
-    } catch (e) {
-      setStatus(`engine unreachable (${e.message}) — is wrangler dev running?`)
-    }
+    const [app, res, health] = await Promise.all([
+      api('/api/app'), api('/api/resources'),
+      fetch('/api/system/health').then((r) => r.json()).catch((e) => ({ error: e.message })),
+    ])
+    setInfo({ app, res, health })
   }
-
   useEffect(() => { refresh() }, [])
 
-  async function add(e) {
-    e.preventDefault()
-    if (!body.trim()) return
-    await api('/api/tables/notes/submit', { method: 'POST', body: JSON.stringify({ body }) })
-    setBody('')
-    refresh()
-  }
-
   return (
-    <main style={{ fontFamily: 'system-ui', maxWidth: 560, margin: '2rem auto' }}>
+    <main style={{ fontFamily: 'system-ui', maxWidth: 760, margin: '2rem auto', padding: '0 1rem' }}>
       <h1>⚡ backend-engine demo</h1>
-      <p>
-        Your backend that you never code. This page is static files in the
-        engine's asset store (<code>/srv/</code>) — every word below it comes
-        from JSON over HTTP. Status: <b>{status}</b>
-      </p>
-      <form onSubmit={add}>
-        <input value={body} onChange={(e) => setBody(e.target.value)} placeholder="new note" />
-        <button type="submit">add</button>
-      </form>
-      <ul>
-        {notes.map((n) => (
-          <li key={n.seq}>{n.payload?.body}</li>
+      <p>Your backend that you never code — every tab below is JSON over HTTP,
+      no backend code exists for any of it.</p>
+      <div>
+        {Object.entries(TABS).map(([k, v]) => (
+          <button key={k} disabled={k === tab} onClick={() => setTab(k)}>{v}</button>
         ))}
-      </ul>
+      </div>
+      <div>
+        <input size={40} value={key} onChange={(e) => { setKey(e.target.value); setKeyState(e.target.value) }} placeholder="page key (?key=)" />
+        <button onClick={refresh}>reload status</button>
+      </div>
+      {tab === 'status' && (
+        <section>
+          <h2>Status</h2>
+          <h3>GET /api/app → {info?.app.status}</h3><pre>{show(info?.app.data)}</pre>
+          <h3>GET /api/resources → {info?.res.status}</h3><pre>{show(info?.res.data)}</pre>
+          <h3>GET /api/system/health</h3><pre>{show(info?.health)}</pre>
+        </section>
+      )}
+      {tab === 'notes' && <Notes />}
+      {tab === 'files' && <Files />}
+      {tab === 'automate' && <Automate />}
+      {tab === 'access' && <Access onKey={() => setKeyState(getKey())} />}
+      {tab === 'agent' && <Agent />}
     </main>
   )
 }

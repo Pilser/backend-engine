@@ -11,17 +11,28 @@ one build, frontend included:
 
 ```sh
 bun install          # workspace root: backend + frontend deps, one lockfile
-bun run build        # web/ builds to dist/ AND copies it into the engine
 ```
 
-`bun run build` = `build:web` (vite build → `web/dist/`) then
-`publish:frontend` (`scripts/publish-frontend.sh` PUTs every file to
-`/api/assets/*`). The engine serves it at `/srv/` with an
-`index.html` SPA fallback — no separate hosting, the engine IS the host.
-Open http://localhost:8788/srv/ (`?key=local-demo-key` on private apps).
+**Two servers in dev, one in production.** `bun run dev:engine` starts the
+engine (`wrangler dev :8788` — the API plus the uploaded SPA at `/srv/`).
+`bun run dev:web` starts Vite (`:5173` — the React source, proxying
+`/api /mcp /srv` to the engine). Code the UI at `:5173` against live data;
+what you see there is what the engine serves after deploy.
 
-Deploy the same way: `ENGINE_URL=https://<app> ENGINE_KEY="$WORKER_KEY"
-bash scripts/publish-frontend.sh` after `wrangler deploy`.
+**Build is not deploy.** `bun run build` only compiles the frontend
+(`web/dist/`, git-ignored). `bun run deploy` builds AND copies the dist
+into the engine (`scripts/publish-frontend.sh` PUTs every file to
+`/api/assets/*`). Deploy reads config, it never guesses:
+
+```sh
+bun run deploy                                            # local defaults (dev key)
+ENGINE_URL=https://<app>.workers.dev ENGINE_KEY="$WORKER_KEY" bun run deploy
+```
+
+The demo app tours almost the whole engine: Status (app/resources/health),
+Tables (CRUD + query + patch), Files (R2 upload/download), Automate
+(recipes + cron jobs + runs), Access (API keys + users + sessions),
+Agent (raw `/mcp` command console — the same door MCP clients use).
 
 ## Setup (5 minutes)
 

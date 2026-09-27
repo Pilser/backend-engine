@@ -8,8 +8,9 @@
     "web"
   ],
   "scripts": {
-    "build": "bun run build:web && bun run publish:frontend",
+    "build": "bun run build:web",
     "build:web": "bun --cwd=web run build",
+    "deploy": "bun run build:web && bun run publish:frontend",
     "publish:frontend": "bash scripts/publish-frontend.sh",
     "dev:engine": "bun --cwd=demo-example run dev",
     "dev:web": "bun --cwd=web run dev"

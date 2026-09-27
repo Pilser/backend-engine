@@ -33,6 +33,33 @@ fn validation() {
 }
 
 #[test]
+fn merge_filter_json() {
+    use engine::plugins::merge_filter_json;
+    assert_eq!(merge_filter_json(None, None), json!(null));
+    assert_eq!(merge_filter_json(Some(&json!({"a": 1})), None), json!({"a": 1}));
+    assert_eq!(
+        merge_filter_json(Some(&json!({"a": 1})), Some(&json!({"b": 2}))),
+        json!({"$and": [{"a": 1}, {"b": 2}]})
+    );
+    assert_eq!(engine::plugins::binding_limit(&json!({}), None), 50);
+    assert_eq!(engine::plugins::binding_limit(&json!({"limit": 10}), Some(99)), 10);
+}
+
+#[test]
+fn route_bindings_resolve() {
+    block_on(async {
+        let mut e = ServerlessEngine::with_defaults();
+        engine::plugins::install(&mut e, &manifest()).await.unwrap();
+        let b = engine::plugins::find_route(&e, "shop", "orders").await.unwrap();
+        assert!(b.is_some());
+        assert_eq!(b.unwrap()["table"], json!("plugin_shop_orders"));
+        assert!(engine::plugins::find_route(&e, "shop", "nope").await.unwrap().is_none());
+        let routes = engine::plugins::routes_for(&e, "shop").await.unwrap();
+        assert_eq!(routes.len(), 1);
+    });
+}
+
+#[test]
 fn install_remove_lifecycle() {
     block_on(async {
         let mut e = ServerlessEngine::with_defaults();

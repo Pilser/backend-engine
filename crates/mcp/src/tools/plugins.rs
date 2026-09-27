@@ -32,7 +32,8 @@ pub async fn show(
         .await
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("plugin '{slug}' is not installed"))?;
-    ok(json!({ "plugin": plugin }))
+    let routes = engine::plugins::routes_for(engine, slug).await.map_err(|e| e.to_string())?;
+    ok(json!({ "plugin": plugin, "routes": routes }))
 }
 
 pub async fn remove(

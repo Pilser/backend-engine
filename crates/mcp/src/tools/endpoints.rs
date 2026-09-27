@@ -75,6 +75,7 @@ pub fn list(
         ("GET", "/api/plugins", "List plugins"),
         ("GET", "/api/plugins/{slug}", "Show plugin"),
         ("DELETE", "/api/plugins/{slug}", "Remove plugin (?prune=, admin)"),
+        ("ANY", "/api/plugin/{slug}/{route}", "Plugin route binding (method per binding)"),
         ("PUT", "/api/rate", "Set rate config"),
         ("PUT", "/api/ttl", "Set table TTL"),
         ("DELETE", "/api/ttl", "Clear table TTL (?table=)"),

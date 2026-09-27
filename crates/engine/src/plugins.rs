@@ -56,7 +56,69 @@ fn valid_route(r: &Json) -> Result<(), String> {
     if table.is_empty() {
         return Err("route needs a table".to_string());
     }
+    if let Some(f) = m.get("filter") {
+        if !f.is_object() {
+            return Err("route filter must be an object".to_string());
+        }
+    }
+    if let Some(l) = m.get("limit") {
+        if l.as_u64().map(|n| n > 1000).unwrap_or(true) {
+            return Err("route limit must be 1..=1000".to_string());
+        }
+    }
     Ok(())
+}
+
+/// Find a route binding by plugin slug + route name.
+pub async fn find_route(engine: &crate::ServerlessEngine, slug: &str, name: &str) -> anyhow::Result<Option<Json>> {
+    if engine.get_table(TABLE_ROUTES).await?.is_none() {
+        return Ok(None);
+    }
+    for rec in engine.list_records(TABLE_ROUTES, 10_000, None, 0, "asc").await? {
+        let r = &rec.payload;
+        let route = r.get("route").unwrap_or(r);
+        if r.get("slug").and_then(|v| v.as_str()) == Some(slug)
+            && route.get("name").and_then(|v| v.as_str()) == Some(name)
+        {
+            return Ok(Some(route.clone()));
+        }
+    }
+    Ok(None)
+}
+
+/// Routes owned by one plugin (for `plugins show`).
+pub async fn routes_for(engine: &crate::ServerlessEngine, slug: &str) -> anyhow::Result<Vec<Json>> {
+    if engine.get_table(TABLE_ROUTES).await?.is_none() {
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::new();
+    for rec in engine.list_records(TABLE_ROUTES, 10_000, None, 0, "asc").await? {
+        let r = &rec.payload;
+        if r.get("slug").and_then(|v| v.as_str()) == Some(slug) {
+            out.push(r.get("route").cloned().unwrap_or(r.clone()));
+        }
+    }
+    Ok(out)
+}
+
+/// Merge a binding's base filter with a caller-supplied one: BOTH must
+/// match (AND). Either side absent → the other (or null filter).
+pub fn merge_filter_json(base: Option<&Json>, client: Option<&Json>) -> Json {
+    match (base, client) {
+        (None, None) => Json::Null,
+        (Some(b), None) => b.clone(),
+        (None, Some(c)) => c.clone(),
+        (Some(b), Some(c)) => json!({ "$and": [b, c] }),
+    }
+}
+
+/// Effective limit: caller `?limit=` capped by the binding (default 50/500).
+pub fn binding_limit(binding: &Json, client: Option<usize>) -> usize {
+    let max = binding.get("limit").and_then(|v| v.as_u64()).unwrap_or(50) as usize;
+    match client {
+        Some(c) => c.min(max).max(1),
+        None => max,
+    }
 }
 
 fn prefixed(slug: &str, name: &str) -> String {

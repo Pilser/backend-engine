@@ -74,22 +74,27 @@ pub enum HttpMode<'p> {
 }
 
 /// A resolved outbound request: secrets substituted, templates rendered.
-/// Execution needs NO database access.
+/// Execution needs NO database access. `result_into` selects the payload
+/// path the response lands on (`$call` keeps `$.call_result`; `$send_email`
+/// writes `$.email_result`).
 pub struct PendingHttp {
     url: String,
     headers: Vec<(String, String)>,
     body: crate::http::HttpBody,
     timeout_ms: u64,
+    result_into: Option<String>,
 }
 
-/// Execute deferred `$call` plans. MUST run WITHOUT the engine Mutex held —
-/// this is pure network I/O plus a write-back into the working payload.
+/// Execute deferred `$call`/`$send_email` plans. MUST run WITHOUT the engine
+/// Mutex held — this is pure network I/O plus a write-back into the working
+/// payload.
 pub async fn execute_pending(calls: Vec<PendingHttp>, payload: &mut Json, logs: &mut Vec<String>) {
     for c in calls {
         let url = c.url.clone();
+        let into = c.result_into.as_deref().unwrap_or("$.call_result").to_string();
         match crate::http::http_call_body(&c.url, &c.headers, &c.body, c.timeout_ms).await {
             Ok((status, resp_body)) => {
-                let _ = set_at(payload, "$.call_result", json!({ "status": status, "body": resp_body }));
+                let _ = set_at(payload, &into, json!({ "status": status, "body": resp_body }));
                 logs.push(format!("call {url} -> {status}"));
             }
             Err(e) => logs.push(format!("call {url}: {e}")),
@@ -825,7 +830,50 @@ async fn apply_action(
                     let (status, resp_body) = crate::http::http_call_body(&url, &headers, &http_body, timeout).await?;
                     set_at(payload, "$.call_result", json!({ "status": status, "body": resp_body }))?;
                 }
-                HttpMode::Defer(pending) => pending.push(PendingHttp { url, headers, body: http_body, timeout_ms: timeout }),
+                HttpMode::Defer(pending) => pending.push(PendingHttp { url, headers, body: http_body, timeout_ms: timeout, result_into: None }),
+            }
+        }
+        // "$send_email": provider email via MAIL_* secrets. Same deferred-HTTP
+        // machinery as `$call`, but the URL is a fixed provider endpoint (no
+        // SSRF surface) and the result lands on `$.email_result`.
+        //   {"$send_email":{"to":"{{$.email}}","subject":"Welcome","text":"hi"}}
+        "$send_email" => {
+            let obj = val.as_object().ok_or_else(|| anyhow::anyhow!("$send_email must be an object"))?;
+            let secrets = crate::secrets::secrets_map(db).await?;
+            let mut to_v = obj.get("to").cloned().ok_or_else(|| anyhow::anyhow!("$send_email needs \"to\""))?;
+            subst_strings(&mut to_v, payload)?;
+            let to = crate::email::parse_addrs(&to_v)?;
+            let subject = subst_strings_str(obj.get("subject").and_then(|v| v.as_str()).ok_or_else(|| anyhow::anyhow!("$send_email needs \"subject\""))?, payload)?;
+            let opt = |name: &str| -> anyhow::Result<Option<String>> {
+                match obj.get(name) {
+                    None => Ok(None),
+                    Some(v) => Ok(Some(subst_strings_str(v.as_str().ok_or_else(|| anyhow::anyhow!("$send_email \"{name}\" must be a string"))?, payload)?)),
+                }
+            };
+            let text = opt("text")?;
+            let html = opt("html")?;
+            let from = opt("from")?;
+            let provider = secrets.get(crate::email::SECRET_PROVIDER).map(String::from).unwrap_or_else(|| "resend".to_string());
+            let call = crate::email::build(
+                &provider,
+                secrets.get(crate::email::SECRET_API_KEY).map(String::as_str),
+                secrets.get(crate::email::SECRET_FROM).map(String::as_str),
+                &crate::email::EmailRequest { to: to.clone(), subject, text, html, from },
+            )?;
+            logs.push(format!("email via {provider} to {}", to.join(",")));
+            let timeout = obj.get("timeout_ms").and_then(|t| t.as_u64()).unwrap_or(15_000);
+            match http_mode {
+                HttpMode::Inline => {
+                    let (status, resp_body) = crate::http::http_call_body(&call.url, &call.headers, &crate::http::HttpBody::Json(call.body), timeout).await?;
+                    set_at(payload, "$.email_result", json!({ "provider": call.provider, "status": status, "body": resp_body }))?;
+                }
+                HttpMode::Defer(pending) => pending.push(PendingHttp {
+                    url: call.url,
+                    headers: call.headers,
+                    body: crate::http::HttpBody::Json(call.body),
+                    timeout_ms: timeout,
+                    result_into: Some("$.email_result".to_string()),
+                }),
             }
         }
         "$format" => {

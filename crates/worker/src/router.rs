@@ -87,6 +87,7 @@ pub async fn run(req: Request, env: Env) -> Result<Response> {
         .get_async("/api/secrets", admin::list_secrets)
         .post_async("/api/secrets", admin::set_secret)
         .delete_async("/api/secrets/:name", admin::remove_secret)
+        .post_async("/api/email/send", admin::email_send)
         // admin: config knobs
         .put_async("/api/rate", admin::rate_config)
         .put_async("/api/ttl", admin::ttl_set)

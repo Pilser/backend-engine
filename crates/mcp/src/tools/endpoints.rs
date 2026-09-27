@@ -70,6 +70,7 @@ pub fn list(
         ("GET", "/api/secrets", "List secrets"),
         ("POST", "/api/secrets", "Set secret"),
         ("DELETE", "/api/secrets/{name}", "Delete secret"),
+        ("POST", "/api/email/send", "Send email via MAIL_* secrets (admin)"),
         ("PUT", "/api/rate", "Set rate config"),
         ("PUT", "/api/ttl", "Set table TTL"),
         ("DELETE", "/api/ttl", "Clear table TTL (?table=)"),

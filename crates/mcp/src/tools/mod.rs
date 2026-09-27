@@ -1,5 +1,6 @@
 pub mod apps;
 pub mod auth;
+pub mod email;
 pub mod endpoints;
 pub mod files;
 pub mod graph;
@@ -29,6 +30,7 @@ pub async fn run(
         "tenant.update" => apps::update(engine, principal, arguments).await,
         "tenant.resources" => apps::resources(engine, principal, arguments).await,
         "endpoints.list" => endpoints::list(engine, principal, arguments),
+        "email.send" => email::send(engine, principal, arguments).await,
         "auth.signup" => auth::signup(engine, principal, arguments).await,
         "auth.login" => auth::login(engine, principal, arguments).await,
         "auth.me" => auth::me(engine, principal, arguments).await,

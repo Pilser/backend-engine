@@ -1,4 +1,4 @@
-//! Admin routes (`/api/keys|hooks|jobs|recipes|secrets|rate|ttl|link|audit|
+//! Admin routes (`/api/keys|hooks|jobs|recipes|email|secrets|rate|ttl|link|audit|
 //! computed|validate|redact|webhook_secret|config`). Ports the donor
 //! `rest_admin.rs` arms 1:1 minus `{board}` (single tenant). Every route is
 //! admin-gated. Table-scoped knobs (`computed`/`validate`/`redact`/`ttl`)
@@ -371,6 +371,33 @@ pub async fn remove_recipe(req: Request, ctx: RouteContext<()>) -> Result<Respon
     }
     Ok(match app.engine.remove_recipe(&name).await {
         Ok(()) => cors::ok(json!({ "ok": true })),
+        Err(e) => cors::bad(&e),
+    })
+}
+
+// ---- email --------------------------------------------------------------
+// One-off send via the MAIL_* secrets (Phase A: plugins). Recipes use the
+// `$send_email` action instead (same provider builders, deferred).
+
+pub async fn email_send(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let mut app = match auth::ctx_for(&req, &ctx).await {
+        Ok(c) => c,
+        Err(r) => return Ok(r),
+    };
+    if let Err(r) = admin(&app) {
+        return Ok(r);
+    }
+    let body = match body_json_for(req, MAX_JSON).await {
+        Ok(b) => b,
+        Err(r) => return Ok(r),
+    };
+    let to = body.get("to").and_then(|v| v.as_str()).unwrap_or("");
+    let subject = body.get("subject").and_then(|v| v.as_str()).unwrap_or("");
+    let text = body.get("text").and_then(|v| v.as_str());
+    let html = body.get("html").and_then(|v| v.as_str());
+    let from = body.get("from").and_then(|v| v.as_str());
+    Ok(match app.engine.send_email(to, subject, text, html, from).await {
+        Ok(out) => cors::ok(json!({ "ok": true, "provider": out["provider"], "status": out["status"] })),
         Err(e) => cors::bad(&e),
     })
 }

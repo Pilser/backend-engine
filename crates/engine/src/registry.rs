@@ -1232,7 +1232,7 @@ pub fn registry() -> Vec<CommandSpec> {
         group: "recipes".into(),
         verb: "add".into(),
         summary: "Add an automation recipe to the app.".into(),
-        description: "Registers a recipe that runs actions when its trigger event fires. TRIGGER EVENTS: \"record.created\", \"record.updated\", \"record.deleted\", \"record.inbound\" (webhook/events), \"record.cron\". --when accepts the event string or {\"event\":\"record.created\",\"table\":\"<name>\",\"when\":\"<expr>\"} to narrow to a table/condition; --match <json> is a filter on the triggering payload (same shape as records.query --filter). ACTIONS (array of objects, applied in order, all optional): {\"$compute\":{\"$.field\":\"<expr>\"}} (set derived field); {\"$set\":{\"$.field\":\"<value>\"}}; {\"$copy\":{\"$.dst\":\"$.src\"}} / {\"$move\":...}; {\"$upsert_other\":{\"table\":\"<t>\",\"record\":{...},\"unique_key\":\"$.id\"}} (write to another table); {\"$patch_other\":{\"table\":\"<t>\",\"seq\":N,\"patch\":{...}}}; {\"$resolve_other\":{\"table\":\"<t>\",\"filter\":{...},\"field\":\"id\",\"into\":\"$.x\"}} (look up one row in another table and copy a field into the payload — for name->id mapping); {\"$create_user\":{\"email\":\"{{$.email}}\",\"password\":\"...\",\"role\":\"student\",\"into\":\"$.user_id\"}} (create an engine auth user from the payload and store its email — ports auto_create_student_account); {\"$call\":{\"url\":\"...\",\"method\":\"POST\",\"body\":{...},\"headers\":{...},\"secret\":\"<name>\"}} (HTTP action; {\"secret\":\"$name\"} resolves app secrets); {\"$log\":\"msg\"}; {\"$set_state\":{\"$.stage\":\"approved\"}}; {\"$schedule\":{...}}; array ops: {\"$push\":{\"$.arr\":v}}, {\"$pull\":...}, {\"$merge\":{\"$.a\":\"$.b\"}}, {\"$sort\":{\"$.arr\":\"asc\"}}, {\"$slice\":{\"$.arr\":[0,10]}}. EXPRESSION SYNTAX for $compute/$when: JSON paths ($.field or field), literals, and functions (concat, $now, arithmetic). RECIPE USES: approval state machines (advance_*), stock level updates, auto-derivations that must write another table, notifications. REST equivalent: POST /api/recipes (see recipes.list).".into(),
+        description: "Registers a recipe that runs actions when its trigger event fires. TRIGGER EVENTS: \"record.created\", \"record.updated\", \"record.deleted\", \"record.inbound\" (webhook/events), \"record.cron\". --when accepts the event string or {\"event\":\"record.created\",\"table\":\"<name>\",\"when\":\"<expr>\"} to narrow to a table/condition; --match <json> is a filter on the triggering payload (same shape as records.query --filter). ACTIONS (array of objects, applied in order, all optional): {\"$compute\":{\"$.field\":\"<expr>\"}} (set derived field); {\"$set\":{\"$.field\":\"<value>\"}}; {\"$copy\":{\"$.dst\":\"$.src\"}} / {\"$move\":...}; {\"$upsert_other\":{\"table\":\"<t>\",\"record\":{...},\"unique_key\":\"$.id\"}} (write to another table); {\"$patch_other\":{\"table\":\"<t>\",\"seq\":N,\"patch\":{...}}}; {\"$resolve_other\":{\"table\":\"<t>\",\"filter\":{...},\"field\":\"id\",\"into\":\"$.x\"}} (look up one row in another table and copy a field into the payload — for name->id mapping); {\"$create_user\":{\"email\":\"{{$.email}}\",\"password\":\"...\",\"role\":\"student\",\"into\":\"$.user_id\"}} (create an engine auth user from the payload and store its email — ports auto_create_student_account); {\"$call\":{\"url\":\"...\",\"method\":\"POST\",\"body\":{...},\"headers\":{...},\"secret\":\"<name>\"}} (HTTP action; {\"secret\":\"$name\"} resolves app secrets); {\"$log\":\"msg\"}; {\"$set_state\":{\"$.stage\":\"approved\"}}; {\"$schedule\":{...}}; {\"$send_email\":{\"to\":\"{{$.email}}\",\"subject\":\"...\",\"text\":\"...\"}} (MAIL_PROVIDER/MAIL_API_KEY/MAIL_FROM secrets configure resend|mailchannels; result on $.email_result); array ops: {\"$push\":{\"$.arr\":v}}, {\"$pull\":...}, {\"$merge\":{\"$.a\":\"$.b\"}}, {\"$sort\":{\"$.arr\":\"asc\"}}, {\"$slice\":{\"$.arr\":[0,10]}}. EXPRESSION SYNTAX for $compute/$when: JSON paths ($.field or field), literals, and functions (concat, $now, arithmetic). RECIPE USES: approval state machines (advance_*), stock level updates, auto-derivations that must write another table, notifications. REST equivalent: POST /api/recipes (see recipes.list).".into(),
         positional: vec![
             ArgSpec {
                 name: "name".into(),
@@ -2086,6 +2086,71 @@ pub fn registry() -> Vec<CommandSpec> {
         examples: vec![],
         see_also: vec!["jobs.list".into()],
         danger_notes: Some("stops the job; run history is kept".into()),
+    });
+
+    specs.push(CommandSpec {
+        group: "email".into(),
+        verb: "send".into(),
+        summary: "Send one email via the configured provider.".into(),
+        description: "Sends via MAIL_PROVIDER (resend|mailchannels, default resend) using the MAIL_API_KEY and MAIL_FROM secrets. At least one of --text/--html is required. Recipes use the $send_email action instead (same builders, deferred).".into(),
+        positional: vec![
+            ArgSpec {
+                name: "to".into(),
+                r#type: ArgType::Str,
+                required: true,
+                help: "Recipient address (comma-separated for several).".into(),
+            },
+            ArgSpec {
+                name: "subject".into(),
+                r#type: ArgType::Str,
+                required: true,
+                help: "Subject line.".into(),
+            },
+        ],
+        flags: vec![
+            FlagSpec {
+                name: "text".into(),
+                r#type: FlagType::Str,
+                default: None,
+                allowed: vec![],
+                repeatable: false,
+                help: "Plain-text body.".into(),
+                conflicts: vec![],
+                requires: vec![],
+            },
+            FlagSpec {
+                name: "html".into(),
+                r#type: FlagType::Str,
+                default: None,
+                allowed: vec![],
+                repeatable: false,
+                help: "HTML body.".into(),
+                conflicts: vec![],
+                requires: vec![],
+            },
+            FlagSpec {
+                name: "from".into(),
+                r#type: FlagType::Str,
+                default: None,
+                allowed: vec![],
+                repeatable: false,
+                help: "Sender override (default: MAIL_FROM secret).".into(),
+                conflicts: vec![],
+                requires: vec![],
+            },
+        ],
+        body_json: None,
+        response: serde_json::json!({ "ok": true, "provider": "resend", "status": 200 }),
+        auth: Role::Admin,
+        destructive: false,
+        dry_run: false,
+        examples: vec![Example {
+            args: "email send ops@example.com 'Deploy done' --text 'v1 is live'".into(),
+            description: "Send a plain-text email.".into(),
+            response: serde_json::json!({ "ok": true, "provider": "resend", "status": 200 }),
+        }],
+        see_also: vec!["secrets.set".into()],
+        danger_notes: None,
     });
 
     specs

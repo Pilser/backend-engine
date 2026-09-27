@@ -708,6 +708,49 @@ impl ServerlessEngine {
         crate::secrets::secret_remove(self.db.as_mut(), name).await
     }
 
+    // ---- outbound email (Phase A: plugins) ------------------------------
+    //
+    // One-off send used by the `email send` CLI verb and POST /api/email/send.
+    // Recipes use the `$send_email` action instead (same provider builders,
+    // deferred through the recipe HTTP pipeline). Provider comes from the
+    // MAIL_* secrets; values here are literal (no payload templating — that
+    // lives in the recipe action).
+    pub async fn send_email(
+        &mut self,
+        to: &str,
+        subject: &str,
+        text: Option<&str>,
+        html: Option<&str>,
+        from: Option<&str>,
+    ) -> anyhow::Result<Json> {
+        let secrets = self.secrets_map().await?;
+        let provider = secrets
+            .get(crate::email::SECRET_PROVIDER)
+            .cloned()
+            .unwrap_or_else(|| "resend".to_string());
+        let req = crate::email::EmailRequest {
+            to: to
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect(),
+            subject: subject.to_string(),
+            text: text.map(String::from),
+            html: html.map(String::from),
+            from: from.map(String::from),
+        };
+        let call = crate::email::build(
+            &provider,
+            secrets.get(crate::email::SECRET_API_KEY).map(String::as_str),
+            secrets.get(crate::email::SECRET_FROM).map(String::as_str),
+            &req,
+        )?;
+        let (status, body) =
+            crate::http::http_call_body(&call.url, &call.headers, &crate::http::HttpBody::Json(call.body), 15_000)
+                .await?;
+        Ok(serde_json::json!({ "provider": call.provider, "status": status, "body": body }))
+    }
+
     // ---- control plane (config) ---------------------------------------
 
     pub async fn set_rate(&mut self, rate: &Json) -> anyhow::Result<()> {

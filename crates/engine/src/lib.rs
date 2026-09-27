@@ -3,6 +3,7 @@ pub mod auth;
 pub mod automation;
 pub mod cron;
 pub mod crud;
+pub mod email;
 pub mod engine;
 pub mod events;
 pub mod expr;

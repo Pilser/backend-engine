@@ -121,6 +121,10 @@ pub async fn run(req: Request, env: Env) -> Result<Response> {
         .post_async("/mcp", core::mcp)
         .get_async("/mcp", core::mcp_get)
         .get_async("/srv", site::srv_root)
+        // Bare "/srv/" (empty path): serve() defaults an empty target to the
+        // index.html SPA fallback — without this, /*path needs ≥1 segment and
+        // the canonical URL falls through to the 404 catchall.
+        .get_async("/srv/", site::serve)
         .get_async("/srv/*path", site::serve)
         .or_else_any_method_async("/*catchall", |req, _ctx| async move {
             Ok(cors::err(404, &format!("not found: {}", req.path())))

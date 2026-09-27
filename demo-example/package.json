@@ -4,7 +4,7 @@
   "private": true,
   "description": "Example app: a full backend via @pilser/backend-engine — no backend code.",
   "scripts": {
-    "dev": "wrangler dev",
+    "dev": "wrangler dev --port 8788",
     "deploy": "wrangler deploy"
   },
   "dependencies": {

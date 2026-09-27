@@ -1,9 +1,27 @@
-# Demo — backend as a dependency
+# Demo — backend as a dependency (+ React frontend)
 
 This folder is a complete, working example: the **entire backend** is the
 `@pilser/backend-engine` npm package. There is no server code here —
 just config. `node_modules/` is git-ignored; everything else is tracked so
 you can copy this pattern.
+
+Part of the repo-root **bun workspace** (`backend-engine-demo`):
+`demo-example` (this backend) + `web` (React frontend). One install,
+one build, frontend included:
+
+```sh
+bun install          # workspace root: backend + frontend deps, one lockfile
+bun run build        # web/ builds to dist/ AND copies it into the engine
+```
+
+`bun run build` = `build:web` (vite build → `web/dist/`) then
+`publish:frontend` (`scripts/publish-frontend.sh` PUTs every file to
+`/api/assets/*`). The engine serves it at `/srv/` with an
+`index.html` SPA fallback — no separate hosting, the engine IS the host.
+Open http://localhost:8788/srv/ (`?key=local-demo-key` on private apps).
+
+Deploy the same way: `ENGINE_URL=https://<app> ENGINE_KEY="$WORKER_KEY"
+bash scripts/publish-frontend.sh` after `wrangler deploy`.
 
 ## Setup (5 minutes)
 

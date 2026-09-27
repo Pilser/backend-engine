@@ -1,0 +1,17 @@
+{
+  "name": "backend-engine-demo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Example: React frontend + backend-engine backend, one bun workspace.",
+  "workspaces": [
+    "demo-example",
+    "web"
+  ],
+  "scripts": {
+    "build": "bun run build:web && bun run publish:frontend",
+    "build:web": "bun --cwd=web run build",
+    "publish:frontend": "bash scripts/publish-frontend.sh",
+    "dev:engine": "bun --cwd=demo-example run dev",
+    "dev:web": "bun --cwd=web run dev"
+  }
+}

@@ -25,6 +25,8 @@ token*
 
 # Node (wrangler / worker-build tooling)
 node_modules/
+# Frontend build output (rebuilt by `bun run build:web`, uploaded by publish-frontend.sh)
+web/dist/
 
 # Logs / OS
 *.log

@@ -119,14 +119,14 @@ fn when_trigger_valid(when: &Json) -> bool {
     };
     matches!(
         s,
-        Some("record.created" | "record.updated" | "record.deleted" | "inbound")
+        Some("record.created" | "record.updated" | "record.deleted" | "inbound" | "email.received")
     ) || s.map(|v| v.starts_with("cron:")).unwrap_or(false)
 }
 
 pub async fn recipe_add(db: &mut dyn Database, recipe: &Recipe) -> anyhow::Result<()> {
     if !when_trigger_valid(&recipe.when_json) {
         anyhow::bail!(
-            "recipe when must be one of: record.created, record.updated, record.deleted, inbound, cron:<name>"
+            "recipe when must be one of: record.created, record.updated, record.deleted, inbound, email.received, cron:<name>"
         );
     }
     match recipe.actions_json.as_ref().and_then(|a| a.as_array()) {

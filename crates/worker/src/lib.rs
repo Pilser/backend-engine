@@ -8,6 +8,7 @@ pub mod ai_proxy;
 pub mod auth;
 pub mod cors;
 pub mod d1_db;
+pub mod email_inbound;
 pub mod handlers_admin;
 pub mod handlers_core;
 pub mod handlers_oauth;
@@ -51,4 +52,16 @@ pub async fn on_queue(
     _ctx: Context,
 ) -> Result<()> {
     queue::consume(&env, batch).await
+}
+
+/// Inbound email (Cloudflare Email Routing → this worker, Phase A).
+/// Stores into `email_log` and runs `email.received` recipes. Route the
+/// domain's mail here in the Cloudflare dashboard; no extra worker.
+#[event(email)]
+pub async fn on_email(
+    message: worker::ForwardableEmailMessage,
+    env: Env,
+    _ctx: Context,
+) -> Result<()> {
+    email_inbound::handle(message, &env).await
 }

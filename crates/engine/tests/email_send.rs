@@ -50,6 +50,24 @@ fn validation() {
 }
 
 #[test]
+fn email_received_trigger() {
+    assert_eq!(engine::events::EventKind::Email.name(), "email.received");
+    block_on(async {
+        let mut e = ServerlessEngine::with_defaults();
+        let ok_recipe = engine::model::Recipe {
+            name: "mail_log".into(),
+            when_json: json!({"event": "email.received"}),
+            match_json: None,
+            enabled: true,
+            dedup_on: None,
+            actions_json: Some(json!([{"$log": "mail"}])),
+            table: None,
+        };
+        assert!(e.add_recipe(&ok_recipe).await.is_ok());
+    });
+}
+
+#[test]
 fn engine_send_uses_secrets() {
     block_on(async {
         let mut e = ServerlessEngine::with_defaults();

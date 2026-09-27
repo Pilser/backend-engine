@@ -8,6 +8,8 @@ pub enum EventKind {
     Deleted,
     Inbound,
     Cron,
+    /// Inbound email (Cloudflare Email Routing `email()` handler).
+    Email,
 }
 
 impl EventKind {
@@ -18,6 +20,7 @@ impl EventKind {
             EventKind::Deleted => "record.deleted",
             EventKind::Inbound => "record.inbound",
             EventKind::Cron => "record.cron",
+            EventKind::Email => "email.received",
         }
     }
 }

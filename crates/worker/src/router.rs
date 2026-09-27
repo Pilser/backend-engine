@@ -120,6 +120,12 @@ pub async fn run(req: Request, env: Env) -> Result<Response> {
         .get_async("/api/system/health", core::system_health)
         .post_async("/mcp", core::mcp)
         .get_async("/mcp", core::mcp_get)
+        // Root opens the hosted app, not a 404: one Worker = one app, and the
+        // app lives at /srv/. (No SPA uploaded yet → /srv/ 404s honestly.)
+        .get_async("/", |req, _ctx| async move {
+            let _ = req;
+            Ok(crate::cors::redirect_to("/srv/"))
+        })
         .get_async("/srv", site::srv_root)
         // Bare "/srv/" (empty path): serve() defaults an empty target to the
         // index.html SPA fallback — without this, /*path needs ≥1 segment and

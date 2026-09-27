@@ -72,24 +72,32 @@ npm install
 npx wrangler dev --port 8788        # or: bunx wrangler dev --port 8788
 ```
 
-Browsers can't send `Authorization` headers by clicking, so the worker
-also accepts `?key=` in the URL. Local `.dev.vars` (git-ignored) ships
-the key `local-demo-key` — click these, no tokens to paste:
-
-- http://localhost:8788/mcp — setup sheet: every route, live
-- http://localhost:8788/api/tables?key=local-demo-key — list tables
-
-Write + read from the terminal (same key, still no headers):
+Public pages need **no key**. The engine is private by default, but one
+switch opens anonymous reads (writes always stay gated):
 
 ```sh
-curl -X POST "localhost:8788/api/tables?key=local-demo-key" -d '{"table":"notes"}'
-curl -X POST "localhost:8788/api/tables/notes/submit?key=local-demo-key" -d '{"body":"hi"}'
-curl "localhost:8788/api/tables/notes/records?key=local-demo-key"
+curl -X PATCH "localhost:8788/api/app?key=local-demo-key" -d '{"public_reads": true}'
 ```
 
-Production is locked down the same way: `wrangler secret put SECRET_KEY`
-+ `wrangler secret put WORKER_KEY`, then every `/api` call needs
-`Authorization: Bearer $WORKER_KEY` (or `?key=`).
+Then just open the app — `/` redirects to the hosted SPA, no tokens:
+
+- http://localhost:8788/ — the React demo (served from `/srv/`)
+- http://localhost:8788/mcp — setup sheet: every route, live
+
+Reads are public now (`/api/tables/notes/records` with no key works);
+writes still need a key (`?key=` in the URL for browsers/terminal,
+`Authorization: Bearer` header for code):
+
+```sh
+curl "localhost:8788/api/tables/notes/records"                          # open
+curl -X POST "localhost:8788/api/tables/notes/submit?key=local-demo-key" -d '{"body":"hi"}'
+```
+
+The demo page bakes the local key (`web/.env.development`) so its form
+works out of the box. Production: `wrangler secret put SECRET_KEY` +
+`wrangler secret put WORKER_KEY`, flip `public_reads` the same way, and
+give real users scoped keys — never bake the admin key into a public
+bundle.
 
 ## Configure it while it runs — the backend is already there
 

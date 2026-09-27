@@ -7,6 +7,7 @@ pub mod graph;
 pub mod jobs;
 pub mod keys;
 pub mod links;
+pub mod plugins;
 pub mod recipes;
 pub mod records;
 pub mod secrets;
@@ -86,6 +87,10 @@ pub async fn run(
         "jobs.show" => jobs::show(engine, principal, arguments).await,
         "jobs.remove" => jobs::remove(engine, principal, arguments).await,
         "jobs.runs" => jobs::runs(engine, principal, arguments).await,
+        "plugins.install" => plugins::install(engine, principal, arguments).await,
+        "plugins.list" => plugins::list(engine, principal, arguments).await,
+        "plugins.show" => plugins::show(engine, principal, arguments).await,
+        "plugins.remove" => plugins::remove(engine, principal, arguments).await,
         other => Err(format!("tool '{other}' not implemented yet")),
     }
 }

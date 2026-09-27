@@ -11,6 +11,7 @@ use crate::{
     handlers_admin as admin,
     handlers_core as core,
     handlers_oauth as oauth,
+    handlers_plugins as plugins,
     handlers_site as site,
     handlers_tables as tables,
 };
@@ -77,6 +78,11 @@ pub async fn run(req: Request, env: Env) -> Result<Response> {
         .post_async("/api/jobs", admin::add_job)
         .delete_async("/api/jobs", admin::remove_job)
         .get_async("/api/jobs/runs", admin::job_runs)
+        // plugins (Phase B: native manifests)
+        .post_async("/api/plugins", plugins::install)
+        .get_async("/api/plugins", plugins::list)
+        .get_async("/api/plugins/:slug", plugins::show)
+        .delete_async("/api/plugins/:slug", plugins::remove)
         // admin: recipes
         .get_async("/api/recipes", admin::list_recipes)
         .post_async("/api/recipes", admin::add_recipe)

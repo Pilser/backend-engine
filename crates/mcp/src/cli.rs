@@ -218,6 +218,7 @@ fn body_key(group: &str, verb: &str) -> Option<(&'static str, bool)> {
         ("records", "update") => Some(("payload", true)),
         ("records", "patch") => Some(("patch", true)),
         ("files", "put") => Some(("content", false)),
+        ("plugins", "install") => Some(("manifest", true)),
         _ => None,
     }
 }

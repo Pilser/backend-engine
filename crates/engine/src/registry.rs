@@ -2153,5 +2153,96 @@ pub fn registry() -> Vec<CommandSpec> {
         danger_notes: None,
     });
 
+    specs.push(CommandSpec {
+        group: "plugins".into(),
+        verb: "install".into(),
+        summary: "Install a plugin manifest (tables, recipes, jobs, routes).".into(),
+        description: "Validates + installs {slug, tables (plugin_<slug>_*), recipes/jobs (auto-prefixed slug__name), routes, email, subapp}. Idempotent per slug (reinstall replaces). Full standard: docs/PLUGINS.md. Trailing JSON carries the manifest.".into(),
+        positional: vec![],
+        flags: vec![],
+        body_json: None,
+        response: serde_json::json!({ "ok": true, "slug": "<slug>", "tables": [], "recipes": [], "jobs": [] }),
+        auth: Role::Admin,
+        destructive: false,
+        dry_run: false,
+        examples: vec![Example {
+            args: "plugins install '{\"slug\":\"shop\",\"tables\":[{\"table\":\"plugin_shop_orders\"}]}'".into(),
+            description: "Install a minimal plugin.".into(),
+            response: serde_json::json!({ "ok": true, "slug": "shop", "tables": ["plugin_shop_orders"], "recipes": [], "jobs": [] }),
+        }],
+        see_also: vec!["plugins.list".into(), "plugins.show".into(), "plugins.remove".into()],
+        danger_notes: None,
+    });
+
+    specs.push(CommandSpec {
+        group: "plugins".into(),
+        verb: "list".into(),
+        summary: "List installed plugins.".into(),
+        description: "Returns installed plugin records (slug, title, version, owned tables/recipes/jobs).".into(),
+        positional: vec![],
+        flags: vec![],
+        body_json: None,
+        response: serde_json::json!({ "ok": true, "plugins": [] }),
+        auth: Role::Reader,
+        destructive: false,
+        dry_run: false,
+        examples: vec![],
+        see_also: vec!["plugins.show".into()],
+        danger_notes: None,
+    });
+
+    specs.push(CommandSpec {
+        group: "plugins".into(),
+        verb: "show".into(),
+        summary: "Show one installed plugin.".into(),
+        description: "Returns the plugin record with its owned tables, recipes, and jobs.".into(),
+        positional: vec![ArgSpec {
+            name: "slug".into(),
+            r#type: ArgType::Name,
+            required: true,
+            help: "Plugin slug.".into(),
+        }],
+        flags: vec![],
+        body_json: None,
+        response: serde_json::json!({ "ok": true, "plugin": { "slug": "<slug>" } }),
+        auth: Role::Reader,
+        destructive: false,
+        dry_run: false,
+        examples: vec![],
+        see_also: vec!["plugins.list".into()],
+        danger_notes: None,
+    });
+
+    specs.push(CommandSpec {
+        group: "plugins".into(),
+        verb: "remove".into(),
+        summary: "Remove an installed plugin.".into(),
+        description: "Drops recipes, jobs, routes, and registration. Tables drop ONLY with --prune (data loss).".into(),
+        positional: vec![ArgSpec {
+            name: "slug".into(),
+            r#type: ArgType::Name,
+            required: true,
+            help: "Plugin slug.".into(),
+        }],
+        flags: vec![FlagSpec {
+            name: "prune".into(),
+            r#type: FlagType::Bool,
+            default: None,
+            allowed: vec![],
+            repeatable: false,
+            help: "Also drop the plugin's tables.".into(),
+            conflicts: vec![],
+            requires: vec![],
+        }],
+        body_json: None,
+        response: serde_json::json!({ "ok": true, "slug": "<slug>", "prune": false, "tables_dropped": [] }),
+        auth: Role::Admin,
+        destructive: true,
+        dry_run: true,
+        examples: vec![],
+        see_also: vec!["plugins.list".into()],
+        danger_notes: Some("with --prune the plugin tables and their data are dropped".into()),
+    });
+
     specs
 }

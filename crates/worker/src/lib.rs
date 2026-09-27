@@ -12,6 +12,7 @@ pub mod email_inbound;
 pub mod handlers_admin;
 pub mod handlers_core;
 pub mod handlers_oauth;
+pub mod handlers_plugins;
 pub mod handlers_site;
 pub mod handlers_tables;
 pub mod http_caller;

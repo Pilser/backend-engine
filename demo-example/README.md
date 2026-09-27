@@ -1,7 +1,7 @@
 # Demo — backend as a dependency
 
 This folder is a complete, working example: the **entire backend** is the
-`@pilser/serverless-worker` npm package. There is no server code here —
+`@pilser/backend-engine` npm package. There is no server code here —
 just config. `node_modules/` is git-ignored; everything else is tracked so
 you can copy this pattern.
 
@@ -28,7 +28,7 @@ npm run deploy                       # 5. live backend
 
 ```sh
 cd demo-example
-bun add @pilser/serverless-worker    # 1. same package, bun's registry path
+bun add @pilser/backend-engine    # 1. same package, bun's registry path
 
 bunx wrangler login                  # 2-4. identical from here on:
 bunx wrangler d1 create demo-example         #    create storage, paste ids
@@ -42,7 +42,7 @@ bunx wrangler dev                    # local dev, if you prefer
 ```
 
 Only the tooling prefix changes (`bunx` vs `npx`); `wrangler.toml`
-points at the same `node_modules/@pilser/serverless-worker/index.js`
+points at the same `node_modules/@pilser/backend-engine/index.js`
 either way (bun installs npm packages into `node_modules` too).
 </details>
 
@@ -72,6 +72,22 @@ curl "localhost:8788/api/tables/notes/records?key=local-demo-key"
 Production is locked down the same way: `wrangler secret put SECRET_KEY`
 + `wrangler secret put WORKER_KEY`, then every `/api` call needs
 `Authorization: Bearer $WORKER_KEY` (or `?key=`).
+
+## Configure it while it runs — the backend is already there
+
+No code, no redeploy to change behavior. The same CLI grammar works in
+your terminal right now (replace the URL with your deployment):
+
+```sh
+curl 'http://localhost:8788/mcp?command=--help'
+curl 'http://localhost:8788/mcp?command=records+list+notes'
+curl -X POST http://localhost:8788/mcp -d '{"command":"records list notes"}'
+```
+
+Point any MCP client at `http://localhost:8788/mcp` (or your deployed
+`/mcp`) and your agent configures the backend by talking to it — one tool,
+`manage_serverless_engine`. Client matrix (Claude, Codex, OpenCode,
+standard JSON) is in the package README: `node_modules/@pilser/backend-engine/README.md`.
 
 ## First calls (no backend code written)
 

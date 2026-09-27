@@ -19,7 +19,7 @@ pub async fn run(req: Request, env: Env) -> Result<Response> {
     Router::new()
         .options("/*catchall", |_, _| Ok(cors::preflight()))
         .get("/healthz", |_, _| {
-            Ok(cors::ok(serde_json::json!({ "ok": true, "service": "serverless-worker" })))
+            Ok(cors::ok(serde_json::json!({ "ok": true, "service": "backend-engine" })))
         })
         .get("/api/version", |_, _| {
             Ok(cors::ok(serde_json::json!({

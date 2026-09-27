@@ -489,7 +489,7 @@ pub async fn system_health(req: Request, ctx: RouteContext<()>) -> Result<Respon
     let db_ok = engine.tenant().await.is_ok();
     Ok(cors::ok(json!({
         "ok": db_ok,
-        "service": "serverless-worker",
+        "service": "backend-engine",
         "tenant": engine::TENANT,
         "version": engine::VERSION,
         "db": if db_ok { "connected" } else { "unreachable" },
@@ -571,7 +571,7 @@ fn mcp_setup(req: &Request, open: bool) -> Response {
             "tool": "manage_serverless_engine",
             "url": url,
             "auth": "open — no bearer needed (set WORKER_KEY to lock it down)",
-            "mcp_client": { "mcpServers": { "serverless-worker": { "url": url } } },
+            "mcp_client": { "mcpServers": { "backend-engine": { "url": url } } },
             "terminal": format!("curl '{url}?command=--help'"),
         }));
     }
@@ -580,7 +580,7 @@ fn mcp_setup(req: &Request, open: bool) -> Response {
         "tool": "manage_serverless_engine",
         "url": url,
         "auth": "Authorization: Bearer WORKER_KEY",
-        "mcp_client": { "mcpServers": { "serverless-worker": {
+        "mcp_client": { "mcpServers": { "backend-engine": {
             "url": url,
             "headers": { "Authorization": "Bearer WORKER_KEY" },
         } } },

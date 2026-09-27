@@ -1,8 +1,11 @@
-# ⚡ serverless-worker — the backend you never code
+# ⚡ backend-engine — your backend that you never code
 
-> **Ship a full backend with JSON config. Zero backend code. Built for AI agents, friendly to JavaScript, running on Cloudflare Workers.**
+> **Backend as a dependency.** Only focus on creativity, your features, and your
+> frontend — the backend is already there. You configure it **while it runs**
+> (JSON over HTTP, or one MCP tool your agent talks to) and go. Zero backend
+> code. One Cloudflare Worker = one app.
 
-`serverless-worker` turns one Cloudflare Worker into a complete backend: database tables,
+`backend-engine` turns one Cloudflare Worker into a complete backend: database tables,
 auth keys, file storage, automations, cron jobs, webhooks. You don't write routes,
 controllers, or migrations — you declare **tables + rules + recipes as JSON**, and the
 engine serves your frontend (or your AI agent) over HTTP.
@@ -39,6 +42,19 @@ Agents get a third door: **one MCP tool** (`manage_serverless_engine`) that spea
 The same commands run over plain HTTP: `GET /mcp?command=records+list+notes`
 or `POST /mcp {"command":"..."}`. One grammar, three doors, zero setup for the URL one.
 
+Your agent configures the backend **while it runs** — point it at `/mcp` and go:
+
+- **Terminal**: `curl "$BASE/mcp?command=--help"` (add `?key=$WORKER_KEY` or the
+  `Authorization` header on locked deployments)
+- **Claude**: `claude mcp add --transport http backend-engine https://<app>/mcp`
+- **Codex** (`~/.codex/config.toml`): `[mcp_servers.backend-engine]` + `url = "https://<app>/mcp"`
+- **OpenCode** (`opencode.json`): `"mcp": {"backend-engine": {"type": "remote", "url": "https://<app>/mcp"}}`
+- **Anything standard**: `POST /mcp` JSON-RPC `tools/call`
+  (`manage_serverless_engine`, `arguments: {"command": "..."}`)
+
+Tip: `GET /mcp` returns the exact `mcpServers` snippet for your deployment —
+copy, paste, done. Full client matrix ships in the npm package README.
+
 ## Where this came from
 
 This engine was converted from a **multi-tenant standalone serverless engine** — a Rust
@@ -72,8 +88,8 @@ Full inventory: [`docs/FEATURES.md`](docs/FEATURES.md). Big picture: [`docs/OVER
 
 ```sh
 # one-time infra (ids go into wrangler.toml)
-wrangler d1 create serverless-worker
-wrangler r2 bucket create serverless-worker-store
+wrangler d1 create backend-engine
+wrangler r2 bucket create backend-engine-store
 wrangler queues create webhook-deliveries
 
 # local edge dev

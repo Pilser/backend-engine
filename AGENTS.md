@@ -1,10 +1,10 @@
-# serverless-worker — agent rules
+# backend-engine — agent rules
 
 ## Build & test (MANDATORY)
 
 - **Local verification = `cargo check` ONLY.** Run
-  `cargo check --workspace --exclude serverless-worker` after editing engine/mcp,
-  and `cargo check -p serverless-worker --target wasm32-unknown-unknown` after
+  `cargo check --workspace --exclude backend-engine` after editing engine/mcp,
+  and `cargo check -p backend-engine --target wasm32-unknown-unknown` after
   editing the Worker shell (it is wasm-only and cannot check natively).
 - **Release builds and tests are done in CI** (`.github/workflows/ci.yml`: native check,
   wasm gate, `worker-build --release`, tests). Never run `cargo build`,

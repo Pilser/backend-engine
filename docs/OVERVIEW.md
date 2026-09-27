@@ -1,8 +1,8 @@
-# serverless-worker — project overview
+# backend-engine — project overview
 
 ## What this is
 
-**A backend you never code.** Deploy `serverless-worker` to Cloudflare Workers and you get
+**A backend you never code.** Deploy `backend-engine` to Cloudflare Workers and you get
 a complete backend — tables, records, auth keys, file storage, scheduled jobs, event
 recipes, webhooks — driven entirely by **JSON config**. No backend code to write, no server
 to run, no database to provision. Your frontend (or your AI agent) talks to the Worker's

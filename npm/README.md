@@ -1,14 +1,19 @@
-# @pilser/serverless-worker
+# @pilser/backend-engine
 
-**Backend as a dependency — not a service.** One install gives your app a
-complete serverless backend engine: database tables, auth keys + users,
-file storage, cron jobs, event automations (recipes), webhooks, static
-hosting, AI proxy, MCP control plane. One Cloudflare Worker = one app.
+**Your backend that you never code (Backend as a dependency).** One install
+gives your app a complete serverless backend engine: database tables, auth
+keys + users, file storage, cron jobs, event automations (recipes), webhooks,
+static hosting, AI proxy, MCP control plane. One Cloudflare Worker = one app.
 
 **You don't write backend code.** No server files, no routes, no ORM, no
 framework to learn. You declare behavior in JSON over HTTP — create a
 table, submit a record, schedule a cron, wire an automation — all API
 calls from your frontend or scripts. If you can `curl`, you can backend.
+
+**Only focus on creativity, your features, and your frontend.** The backend
+is already there — you configure it **while it runs** and go. Tables,
+validation, automations, schedules are declared at runtime as JSON and take
+effect immediately. No redeploy to change behavior.
 
 **It's free.** MIT-licensed and runs on Cloudflare's free tier (Workers
 + D1 + R2). No per-seat pricing, no hosted-backend bill, no vendor
@@ -18,7 +23,7 @@ self-host it, it's yours.
 ## Install
 
 ```sh
-npm i @pilser/serverless-worker        # bun add @pilser/serverless-worker
+npm i @pilser/backend-engine        # bun add @pilser/backend-engine
 ```
 
 Copy `wrangler.example.toml` (in this package) to `wrangler.toml` in your
@@ -26,7 +31,7 @@ project and fill in your ids:
 
 ```toml
 name = "my-app"
-main = "node_modules/@pilser/serverless-worker/index.js"
+main = "node_modules/@pilser/backend-engine/index.js"
 compatibility_date = "2026-09-01"
 
 [vars]
@@ -78,5 +83,44 @@ curl -H "$K" -X POST $BASE/api/tables -d '{"table":"notes"}'
 curl -H "$K" -X POST $BASE/api/tables/notes/submit -d '{"body":"hi"}'
 ```
 
-Full surface: `GET /mcp` on your deployment, or the `endpoints.list` MCP tool.
-Source + guides: https://github.com/Pilser/serverless-worker
+## Configure at runtime — terminal + MCP clients
+
+The backend is already running — configure it live. One tool
+(`manage_serverless_engine`) speaks CLI; three doors lead to it.
+
+**Terminal (zero setup)** — same grammar over plain HTTP:
+
+```sh
+curl "$BASE/mcp?command=--help"
+curl "$BASE/mcp?command=records+list+notes"
+curl -X POST $BASE/mcp -d '{"command":"records list notes"}'
+```
+
+Locked deployments add auth (`Authorization: Bearer $WORKER_KEY` header,
+or `?key=$WORKER_KEY` in the URL — browsers can only do the latter).
+
+**MCP clients** — point at `https://<your-app>/mcp` (it serves MCP
+JSON-RPC). Easiest start: open `GET /mcp` in a browser — it returns the
+exact `mcpServers` snippet for your deployment, auth included:
+
+- **Claude**: `claude mcp add --transport http backend-engine https://<app>/mcp`
+  (+ `--header "Authorization: Bearer $WORKER_KEY"` when locked), or
+  `.mcp.json`: `{"mcpServers": {"backend-engine": {"url": "...", "headers": {...}}}}}`
+- **Codex** (`~/.codex/config.toml`):
+  ```toml
+  [mcp_servers.backend-engine]
+  url = "https://<app>/mcp"
+  http_headers = { "Authorization" = "Bearer $WORKER_KEY" }  # when locked
+  ```
+- **OpenCode** (`opencode.json`):
+  ```json
+  {"mcp": {"backend-engine": {"type": "remote", "url": "https://<app>/mcp",
+    "headers": {"Authorization": "Bearer $WORKER_KEY"}}}}
+  ```
+  (v2 config nests servers under `"mcp": {"servers": {...}}`)
+- **Any standard client**: `POST /mcp` JSON-RPC `tools/call` with
+  `{"name": "manage_serverless_engine", "arguments": {"command": "..."}}`.
+  Start agents with command `--help`, then `<group> --help`.
+
+Full route surface: `GET /mcp` on your deployment, or the `endpoints.list` MCP tool.
+Source + guides: https://github.com/Pilser/backend-engine

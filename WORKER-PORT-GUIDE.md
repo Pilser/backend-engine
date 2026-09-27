@@ -1,4 +1,4 @@
-# serverless-worker — Cloudflare Workers Port Guide (single-tenant)
+# backend-engine — Cloudflare Workers Port Guide (single-tenant)
 
 Target: one Worker binary = one tenant (one app). No multi-app, no `board_id` routing.
 Source copy: `crates/*`, `docs/*`, `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml` from `../serverless-engine/`.
@@ -33,7 +33,7 @@ Excluded on purpose: `target/`, `turso/`, `zerowrapper/`, `topcoat/`, `deploy/`,
 1. `crates/worker/` (`cdylib`, `worker = "0.8"`, `wasm-bindgen-futures`): `lib.rs` with `#[event(fetch)]` Router mirroring `/api/srv/*` paths minus `{board_id}` segment, `#[event(scheduled)]` calling `job_due()` + `ttl_sweep()` + webhook flush, Queue consumer for webhook delivery with `Fetch`.
 2. `crates/worker/src/d1_db.rs`: `impl engine::Database for D1Db` (worker `D1Database` binding). `query/insert/update/delete/aggregate` → parameterized D1 SQL. `allocate_seqs` → D1 counter row + `RETURNING`. **Correction (2026-09-26, see PORT-TRACK.md Phase 5a): the storage seam is `async_trait(?Send)` — a sync engine cannot await D1/R2 on wasm (no blocking executor exists), so `engine` + `mcp` are async throughout. Correctness-first adapter: tenant/table SQL prefilter, everything else filtered/ordered/paginated in Rust via the shared `apply_query` helper (zero drift vs the memory adapter).
 3. `crates/worker/src/r2_store.rs`: `impl engine::ObjectStore for R2Store` (`get/put/delete/list/head` on R2 binding; assets + files prefixes).
-4. `wrangler.toml`: `main = "build/serverless-worker/index.js"` (current worker-build emits `index.js` + `index_bg.wasm`; package is `serverless-worker` because the SDK owns the `worker` name), `compatibility_date`, bindings `[[d1_databases]]`, `[[r2_buckets]]`, `[[kv_namespaces]]` (optional cache), `[[durable_objects.bindings]]` (1 class `TenantDO` incl. SQLite + alarm + websockets), `[[analytics_engine_datasets]]` (usage), `[[queues.producers]]`/`[[queues.consumers]]` (`webhook-deliveries`, created via `wrangler queues create`), `[triggers] crons = ["*/5 * * * *"]`, `[build] command = "worker-build --release"`.
+4. `wrangler.toml`: `main = "build/backend-engine/index.js"` (current worker-build emits `index.js` + `index_bg.wasm`; package is `backend-engine` because the SDK owns the `worker` name), `compatibility_date`, bindings `[[d1_databases]]`, `[[r2_buckets]]`, `[[kv_namespaces]]` (optional cache), `[[durable_objects.bindings]]` (1 class `TenantDO` incl. SQLite + alarm + websockets), `[[analytics_engine_datasets]]` (usage), `[[queues.producers]]`/`[[queues.consumers]]` (`webhook-deliveries`, created via `wrangler queues create`), `[triggers] crons = ["*/5 * * * *"]`, `[build] command = "worker-build --release"`.
 5. `TenantDO` (durable object): holds per-tenant counters + rate state + alarm for TTL/job sweep fallback + hibernatable websockets replacing `broadcast`. Only one instance (id from fixed name, e.g. `"singleton"`).
 6. Auth: single `WORKER_KEY` secret env + optional 1 user row. `issue_key/list_keys/revoke` collapse to env check. Password users: see §3 bcrypt verdict.
 
@@ -99,6 +99,6 @@ deploy: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`.
   comes from CI — never hand-upload a laptop build.
 - Manual/urgent path: `scripts/sync-worker.sh [--env production] [--artifact DIR from
   CI] [--skip-build] [--secrets-only]`. Needs `CLOUDFLARE_API_TOKEN` in env or a
-  `wrangler login` session. First-time setup: `wrangler d1 create serverless-worker`,
-  paste id into `wrangler.toml`, `wrangler r2 bucket create serverless-worker-store`,
+  `wrangler login` session. First-time setup: `wrangler d1 create backend-engine`,
+  paste id into `wrangler.toml`, `wrangler r2 bucket create backend-engine-store`,
   then deploy and save the public URL back into `WORKER_URL`.

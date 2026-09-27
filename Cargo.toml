@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 # engine = the keeper core. mcp = pure JSON-RPC tool layer (transport deleted).
-# worker (package `serverless-worker`) = the Cloudflare Worker shell
+# worker (package `backend-engine`) = the Cloudflare Worker shell
 # (fetch/scheduled/queue/DO + D1/R2 adapters). NOTE: `cargo check` on the
 # shell needs the wasm target (AGENTS.md); native workspace checks exclude it.
 # The donor crates (server/cli/helixdb) were harvested (route tables, CORS,

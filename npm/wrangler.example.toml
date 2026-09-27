@@ -1,8 +1,8 @@
 # Copy to wrangler.toml in your project and fill in the REPLACE_ME values.
-# Pairs with: npm i @pilser/serverless-worker  (or: bun add @pilser/serverless-worker)
+# Pairs with: npm i @pilser/backend-engine  (or: bun add @pilser/backend-engine)
 
 name = "my-app"
-main = "node_modules/@pilser/serverless-worker/index.js"
+main = "node_modules/@pilser/backend-engine/index.js"
 compatibility_date = "2026-09-01"
 
 [build]

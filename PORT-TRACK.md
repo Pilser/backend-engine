@@ -1,4 +1,4 @@
-# serverless-worker port tracker — multi-tenant daemon → single-tenant Workers engine
+# backend-engine port tracker — multi-tenant daemon → single-tenant Workers engine
 
 > Goal: a deployable Cloudflare Worker (one Worker = one tenant/app) that serves the
 > full engine API over HTTP, backed by D1 + R2 + Durable Objects.
@@ -103,14 +103,14 @@ Legend: ⬜ pending · 🔨 in progress · ✅ done · ⚠️ blocked · ❌ dro
 
 ## Phase 4 checklist
 
-- [x] `crates/worker` (`serverless-worker` pkg, cdylib, `worker = "0.8"` + `d1`/`queue` features)
+- [x] `crates/worker` (`backend-engine` pkg, cdylib, `worker = "0.8"` + `d1`/`queue` features)
 - [x] `lib.rs`: `#[event(fetch)]` → router; `#[event(scheduled)]` stub
 - [x] `router.rs`: `/healthz`, `/api/version`, 404 JSON (CORS + full surface in Phase 6)
 - [x] `tenant_do.rs`: `TenantDO` stub (`DurableObject::new` + `fetch`)
-- [x] `wrangler.toml` main → `build/serverless-worker/index.js` (current worker-build emits index.js + index_bg.wasm)
+- [x] `wrangler.toml` main → `build/backend-engine/index.js` (current worker-build emits index.js + index_bg.wasm)
 - [x] CI: native check/test exclude the wasm-only shell; wasm-gate checks all three
       crates with split forbidden-crate greps (tokio allowed only in shell graph)
-- [x] `cargo check -p serverless-worker --target wasm32-unknown-unknown` green
+- [x] `cargo check -p backend-engine --target wasm32-unknown-unknown` green
   (needed direct `wasm-bindgen` dep for the `durable_object` expansion)
 - [ ] CI `worker-build --release` produces `worker-dist/` (verified in CI, not locally)
 
@@ -158,7 +158,7 @@ Harvested into the worker in Phases 5b–7. Recover donor sources with
 
 - [x] release profile → `opt-z` + thin LTO + strip (`[profile.release]`)
 - [x] CI wasm size gate (fail > 60 MiB, warn > 30 MiB)
-- [x] `sync-worker.sh`: `build/serverless-worker/` paths + idempotent queue creation
+- [x] `sync-worker.sh`: `build/backend-engine/` paths + idempotent queue creation
 - [x] guide staleness fixed (async deviation §2.2, shim path, queue config)
 - [x] `endpoints.list` route index rewritten to the tenant-less surface
 - [x] donor crates (`server`/`cli`/`helixdb`) deleted (in git history)
@@ -173,7 +173,7 @@ Prereqs: D1/R2 ids in `wrangler.toml`, `.dev.vars` (or secrets) with
 `export K="Authorization: Bearer $WORKER_KEY"`.
 
 ```sh
-BASE=http://localhost:8787   # or https://serverless-worker.<acct>.workers.dev
+BASE=http://localhost:8787   # or https://backend-engine.<acct>.workers.dev
 curl $BASE/healthz                                        # {ok:true}
 curl $BASE/mcp                                            # setup sheet: MCP client config + terminal usage
 curl $BASE/api/version                                    # version + singleton
@@ -231,6 +231,16 @@ curl -H "$K" -X POST $BASE/api/secrets -d '{"name":"OAUTH_CLIENT_ID","value":"<i
 - [x] fixed adjacent leak: MCP `keys.show` exposed `key_hash`/`salt`
 - [x] tests updated; native + `--tests` + wasm green, graphs clean
 
+## Rename (2026-09-27) — serverless-worker → backend-engine
+
+- Repo `Pilser/serverless-worker` → `Pilser/backend-engine` (redirect kept).
+- npm: `@pilser/serverless-worker@0.1.0` stays published (deprecate later);
+  fresh line `@pilser/backend-engine@0.1.0` from the moved `v0.1.0` tag.
+- Crate `serverless-worker` → `backend-engine` (dir `crates/worker` kept);
+  runtime labels (`service`, `mcpServers`) follow. The MCP tool name
+  `manage_serverless_engine` is UNCHANGED (stable agent API).
+- Tagline: "your backend that you never code (Backend as a dependency)".
+
 ## CI incident log, continued (2026-09-26)
 
 - ✅ `worker-build` GREEN (run 36276504546): all 3 jobs success after
@@ -247,10 +257,10 @@ curl -H "$K" -X POST $BASE/api/secrets -d '{"name":"OAUTH_CLIENT_ID","value":"<i
 ## Packaging (2026-09-26) — npm binary distribution
 
 - The shippable artifact is the worker-build output (`index.js` +
-  `index_bg.wasm`), published to npm as `@pilser/serverless-worker` on
+  `index_bg.wasm`), published to npm as `@pilser/backend-engine` on
   version tags. worker-build runs with an explicit crate path + absolute
   out dir (virtual workspaces have no root package for it to read).
-- Consumers: `npm i @pilser/serverless-worker`, point `wrangler.toml main`
+- Consumers: `npm i @pilser/backend-engine`, point `wrangler.toml main`
   at the package shim, add their bindings/secrets, `wrangler deploy`.
   Works identically under bun (`bun add`, same registry).
 - `npm/package.json` is the publish template (version stamped from the git
@@ -289,12 +299,12 @@ curl -H "$K" -X POST $BASE/api/secrets -d '{"name":"OAUTH_CLIENT_ID","value":"<i
   STRUCT fields named `board_id` stay (stored-row shape + data compat) but are
   always `TENANT`. `Board`/`TABLE_APPS` multi-app machinery is deleted; `Notify`
   dropped to `(kind, seq, payload)` (no in-workspace consumers).
-- 2026-09-26: worker package named `serverless-worker`, NOT `worker` (SDK crate
+- 2026-09-26: worker package named `backend-engine`, NOT `worker` (SDK crate
   owns that name; `use worker::…` would self-resolve and `worker-macros`
   hardcodes `::worker::` paths, so the dep cannot be renamed instead).
 - 2026-09-26: worker shell is wasm-only (`cargo check` natively fails inside
-  wasm-bindgen macros — expected). Local rule: `--exclude serverless-worker`
-  natively, `-p serverless-worker --target wasm32-unknown-unknown` for the shell.
+  wasm-bindgen macros — expected). Local rule: `--exclude backend-engine`
+  natively, `-p backend-engine --target wasm32-unknown-unknown` for the shell.
 - 2026-09-26: split wasm-gate greps — engine/mcp forbid
   tokio|hyper|reqwest|bcrypt|jsonschema|jsonwebtoken; shell forbids all but
   tokio (worker's own wasm-shimmed copy).

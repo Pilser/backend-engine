@@ -2,7 +2,7 @@
 # Trigger: git tag vX.Y.Z && git push origin vX.Y.Z
 # Required GitHub Secret: NPM_TOKEN (npm access token with publish rights:
 # npmjs.com → avatar → Access Tokens → Generate New Token → Automation).
-# First-time setup: confirm @pilser/serverless-worker is free on npm
+# First-time setup: confirm @pilser/backend-engine is free on npm
 # (rename in this file + npm/README.md if taken), add NPM_TOKEN, push a tag.
 
 name: Publish
@@ -26,11 +26,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo install worker-build --locked
       - name: build release binary
-        run: worker-build --release --out-dir "$PWD/build/serverless-worker" "$PWD/crates/worker"
+        run: worker-build --release --out-dir "$PWD/build/backend-engine" "$PWD/crates/worker"
       - name: assemble npm package
         run: |
           VERSION="${GITHUB_REF#refs/tags/v}"
-          DIST="build/serverless-worker"
+          DIST="build/backend-engine"
           ls "$DIST/index.js" "$DIST/index_bg.wasm"
           cp npm/README.md npm/wrangler.example.toml "$DIST/"
           python3 - "$DIST" "$VERSION" <<'PYEOF'
@@ -41,11 +41,11 @@ jobs:
           # replacing it.
           pkg = f"{dist}/package.json"
           data = json.load(open(pkg))
-          data["name"] = "@pilser/serverless-worker"
+          data["name"] = "@pilser/backend-engine"
           data["version"] = version
-          data["description"] = "A complete backend as one Cloudflare Worker: tables, auth, files, jobs, recipes, webhooks, cron, MCP."
+          data["description"] = "your backend that you never code (Backend as a dependency): tables, auth, files, cron, recipes, webhooks, AI proxy, MCP control plane on one Cloudflare Worker."
           data["license"] = "MIT"
-          data["repository"] = {"type": "git", "url": "https://github.com/Pilser/serverless-worker.git"}
+          data["repository"] = {"type": "git", "url": "https://github.com/Pilser/backend-engine.git"}
           data["keywords"] = ["cloudflare", "workers", "backend", "serverless", "d1", "r2", "mcp"]
           data.setdefault("files", []).extend(
               [f for f in ("README.md", "wrangler.example.toml") if f not in data["files"]]
@@ -55,14 +55,14 @@ jobs:
           PYEOF
       - name: wasm size gate (64 MiB Workers limit)
         run: |
-          WASM=build/serverless-worker/index_bg.wasm
+          WASM=build/backend-engine/index_bg.wasm
           SIZE=$(stat -c%s "$WASM")
           echo "wasm: $WASM ($SIZE bytes)"
           if [ "$SIZE" -gt 62914560 ]; then
             echo "::error::wasm $SIZE bytes exceeds the 64 MiB Workers limit"; exit 1;
           fi
       - name: "publish to npm (also serves bun: bun uses the npm registry)"
-        working-directory: build/serverless-worker
+        working-directory: build/backend-engine
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |

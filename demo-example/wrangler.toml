@@ -1,9 +1,9 @@
-# Demo app: backend = @pilser/serverless-worker (installed via npm).
+# Demo app: backend = @pilser/backend-engine (installed via npm).
 # Fill in the REPLACE_ME values, then: npm run deploy
 # Full walkthrough in ./README.md.
 
 name = "demo-example"
-main = "node_modules/@pilser/serverless-worker/index.js"
+main = "node_modules/@pilser/backend-engine/index.js"
 compatibility_date = "2026-09-01"
 
 [build]

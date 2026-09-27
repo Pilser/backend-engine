@@ -1,4 +1,4 @@
-//! serverless-worker — single-tenant Workers engine entry point.
+//! backend-engine — single-tenant Workers engine entry point.
 //!
 //! One Worker = one app. HTTP serving (`fetch`), background work (`scheduled`
 //! Cron Trigger + `queue` webhook pipeline) and per-tenant state (`TenantDO`)

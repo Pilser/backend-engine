@@ -1,8 +1,8 @@
 # NOTE: the package cannot be named `worker` — that is the Cloudflare SDK
 # crate, and `use worker::…` inside our own crate would self-resolve.
-# worker-build emits build/<package-name>/shim.mjs (see wrangler.toml).
+# worker-build emits index.js + index_bg.wasm into the out dir (see wrangler.toml).
 [package]
-name = "serverless-worker"
+name = "backend-engine"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

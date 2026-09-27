@@ -708,7 +708,7 @@ async fn apply_action(
             let tbl = obj.get("table").and_then(|v| v.as_str()).unwrap_or(table);
             let mut p = obj.get("payload").cloned().unwrap_or(Json::Object(serde_json::Map::new()));
             subst_strings(&mut p, payload)?;
-            let principal = Principal { id: crate::TENANT.to_string(), role: "owner".to_string(), scope: None, writer: None };
+            let principal = Principal { id: crate::TENANT.to_string(), role: "owner".to_string(), scope: None, writer: None, tables: None };
             crate::crud::record_insert(db, tbl, p, Some(&format!("recipe:{}", crate::TENANT)), true, &principal).await?;
         }
         "$patch_other" => {
@@ -765,7 +765,7 @@ async fn apply_action(
             let password = subst_strings_str(obj.get("password").and_then(|v| v.as_str()).unwrap_or("MigrationTempPass2026"), payload)?;
             let role = obj.get("role").and_then(|v| v.as_str()).unwrap_or("student");
             let into = obj.get("into").and_then(|v| v.as_str()).unwrap_or("$.created_user_email");
-            let principal = Principal { id: crate::TENANT.to_string(), role: "owner".to_string(), scope: None, writer: None };
+            let principal = Principal { id: crate::TENANT.to_string(), role: "owner".to_string(), scope: None, writer: None, tables: None };
             let user = crate::auth::user_signup(db, &email, &password, None, role, &principal).await
                 .map_err(|e| anyhow::anyhow!("$create_user: {e}"))?;
             set_at(payload, into, Json::String(user.email))?;

@@ -40,6 +40,7 @@ pub async fn issue_key(
     role: &str,
     writer: Option<&str>,
     scope: Option<&str>,
+    tables: Option<Vec<String>>,
 ) -> anyhow::Result<(KeyRecord, String)> {
     let role = if role.is_empty() { "writer" } else { role };
     if role == "customer" && scope.is_none() {
@@ -47,6 +48,9 @@ pub async fn issue_key(
     }
     if role != "customer" && scope.is_some() {
         anyhow::bail!("only customer keys may carry a scope");
+    }
+    if tables.as_ref().map(|t| t.is_empty()).unwrap_or(false) {
+        anyhow::bail!("tables scope must list at least one table (omit for all tables)");
     }
     let bucket = uuid::Uuid::new_v4().to_string();
     let salt = uuid::Uuid::new_v4().to_string();
@@ -59,6 +63,7 @@ pub async fn issue_key(
         writer: writer.map(String::from),
         scope: scope.map(String::from),
         revoked_at: None,
+        tables,
     };
     db.insert(TABLE_KEYS, Row::new(Key::text(&bucket), serde_json::to_value(&rec)?)).await?;
     Ok((rec, key_secret))
@@ -136,6 +141,7 @@ pub async fn resolve_principal(
                 role: u.role.clone(),
                 scope: None,
                 writer: Some(u.email.clone()),
+                tables: None,
             });
         }
         if let Some(u) = resolve_jwt_user(t) {
@@ -144,6 +150,7 @@ pub async fn resolve_principal(
                 role: u.role.clone(),
                 scope: None,
                 writer: Some(u.email.clone()),
+                tables: None,
             });
         }
         if let Some(kr) = find_active_key(db, t).await? {
@@ -152,10 +159,11 @@ pub async fn resolve_principal(
                 role: kr.role.clone(),
                 scope: kr.scope.clone().or_else(|| scope.map(String::from)),
                 writer: kr.writer.clone(),
+                tables: kr.tables.clone(),
             });
         }
     }
-    Ok(Principal { id: "anon".to_string(), role: "none".to_string(), scope: None, writer: None })
+    Ok(Principal { id: "anon".to_string(), role: "none".to_string(), scope: None, writer: None, tables: None })
 }
 
 pub fn force_scope(principal: &Principal, payload: &mut serde_json::Value) {

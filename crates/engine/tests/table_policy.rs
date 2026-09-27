@@ -19,6 +19,7 @@ fn cfg(public_read: Option<bool>, write_only: Option<bool>) -> TableConfig {
         created_at: None,
         public_read,
         write_only,
+        allow_anon_submit: None,
     }
 }
 
@@ -38,6 +39,48 @@ fn anon_read_matrix() {
 fn old_configs_deserialize() {
     let c: TableConfig = serde_json::from_value(json!({"table": "t"})).unwrap();
     assert_eq!((c.public_read, c.write_only), (None, None));
+}
+
+#[test]
+fn scoped_keys_and_allows_table() {
+    block_on(async {
+        let mut e = ServerlessEngine::with_defaults();
+        let (_rec, secret) = e
+            .issue_key("writer", None, None, Some(vec!["a".to_string()]))
+            .await
+            .unwrap();
+        let p = e.resolve_principal(Some(&secret), None).await.unwrap();
+        assert!(p.allows_table("a"));
+        assert!(!p.allows_table("b"));
+        assert!(e.issue_key("writer", None, None, Some(vec![])).await.is_err());
+        let (_r2, s2) = e.issue_key("reader", None, None, None).await.unwrap();
+        let p2 = e.resolve_principal(Some(&s2), None).await.unwrap();
+        assert!(p2.allows_table("anything"));
+    });
+}
+
+#[test]
+fn email_format() {
+    block_on(async {
+        let mut e = ServerlessEngine::with_defaults();
+        e.create_table(
+            "contacts",
+            Some(json!({"type": "object", "properties": {"email": {"type": "string", "format": "email"}}})),
+            None,
+        )
+        .await
+        .unwrap();
+        let p = engine::model::Principal {
+            id: "t".into(),
+            role: "owner".into(),
+            scope: None,
+            writer: None,
+            tables: None,
+        };
+        assert!(e.insert_record("contacts", json!({"email": "a@x.io"}), None, false, &p).await.is_ok());
+        assert!(e.insert_record("contacts", json!({"email": "not-an-email"}), None, false, &p).await.is_err());
+        assert!(e.insert_record("contacts", json!({"email": "a@b"}), None, false, &p).await.is_err());
+    });
 }
 
 #[test]

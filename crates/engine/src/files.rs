@@ -50,7 +50,7 @@ pub async fn file_upload(
         }
     }
     let principal =
-        Principal { id: crate::TENANT.to_string(), role: "owner".to_string(), scope: None, writer: None };
+        Principal { id: crate::TENANT.to_string(), role: "owner".to_string(), scope: None, writer: None, tables: None };
     crate::crud::record_insert(db, table, payload, None, false, &principal).await
 }
 

@@ -566,8 +566,9 @@ impl ServerlessEngine {
         role: &str,
         writer: Option<&str>,
         scope: Option<&str>,
+        tables: Option<Vec<String>>,
     ) -> anyhow::Result<(KeyRecord, String)> {
-        crate::auth::issue_key(self.db.as_mut(), role, writer, scope).await
+        crate::auth::issue_key(self.db.as_mut(), role, writer, scope, tables).await
     }
 
     pub async fn list_keys(&self) -> anyhow::Result<Vec<KeyRecord>> {
@@ -617,7 +618,7 @@ impl ServerlessEngine {
         let exists = crate::auth::find_user(self.db.as_ref(), &email).await?.is_some();
         if !exists {
             let owner =
-                Principal { id: crate::TENANT.to_string(), role: "owner".to_string(), scope: None, writer: None };
+                Principal { id: crate::TENANT.to_string(), role: "owner".to_string(), scope: None, writer: None, tables: None };
             let pw = uuid::Uuid::new_v4().to_string();
             crate::auth::user_signup(self.db.as_mut(), &email, &pw, None, "reader", &owner).await?;
         }
@@ -829,9 +830,9 @@ impl ServerlessEngine {
         crate::schema::redact_set(self.db.as_mut(), table, paths).await
     }
 
-    /// Per-table access policy patch (S1): `{public_read, write_only}` —
-    /// absent leaves, null clears. Used by `tables config` and
-    /// `PATCH /api/tables/:table`.
+    /// Per-table access policy patch (S1+S2): `{public_read, write_only,
+    /// allow_anon_submit}` — absent leaves, null clears. Used by
+    /// `tables config` and `PATCH /api/tables/:table`.
     pub async fn set_table_policy(&mut self, table: &str, patch: &Json) -> anyhow::Result<()> {
         let empty = serde_json::Map::new();
         let m = patch.as_object().unwrap_or(&empty);
@@ -840,6 +841,7 @@ impl ServerlessEngine {
             table,
             m.get("public_read"),
             m.get("write_only"),
+            m.get("allow_anon_submit"),
         )
         .await
     }

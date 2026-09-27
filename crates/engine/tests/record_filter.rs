@@ -9,7 +9,7 @@ use futures_executor::block_on;
 use serde_json::json;
 
 fn owner() -> Principal {
-    Principal { id: "test".to_string(), role: "owner".to_string(), scope: None, writer: None }
+    Principal { id: "test".to_string(), role: "owner".to_string(), scope: None, writer: None, tables: None }
 }
 
 fn filter(f: serde_json::Value) -> engine::storage::ir::SrvFilter {

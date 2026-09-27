@@ -66,6 +66,10 @@ pub struct TableConfig {
     /// applications, reports).
     #[serde(default)]
     pub write_only: Option<bool>,
+    /// Standalone anonymous-submit allowlist (S2: P1): submit open on this
+    /// table while reads follow the read policy. `write_only` implies it.
+    #[serde(default)]
+    pub allow_anon_submit: Option<bool>,
 }
 
 impl TableConfig {
@@ -78,10 +82,10 @@ impl TableConfig {
         self.public_read.unwrap_or(tenant_public)
     }
 
-    /// Anonymous-submit rule: open only on write-only tables for now
-    /// (S2 adds the standalone `allow_anon_submit` knob).
+    /// Anonymous-submit rule: open on write-only tables or with the
+    /// standalone `allow_anon_submit` knob.
     pub fn anon_submit_open(&self) -> bool {
-        self.write_only.unwrap_or(false)
+        self.write_only.unwrap_or(false) || self.allow_anon_submit.unwrap_or(false)
     }
 }
 
@@ -112,6 +116,10 @@ pub struct KeyRecord {
     pub scope: Option<String>,
     #[serde(default)]
     pub revoked_at: Option<String>,
+    /// Table scope (S2: P1 proposals). None = all tables; Some(list) =
+    /// only these tables on table-data routes. Stored at issuance.
+    #[serde(default)]
+    pub tables: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -196,6 +204,20 @@ pub struct Principal {
     pub scope: Option<String>,
     #[serde(default)]
     pub writer: Option<String>,
+    /// Table scope carried from scoped API keys (None = all tables).
+    #[serde(default)]
+    pub tables: Option<Vec<String>>,
+}
+
+impl Principal {
+    /// Table-data access for scoped keys: unscoped principals (users,
+    /// sessions, unscoped keys) pass; scoped keys must list the table.
+    pub fn allows_table(&self, table: &str) -> bool {
+        self.tables
+            .as_ref()
+            .map(|t| t.iter().any(|x| x == table))
+            .unwrap_or(true)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

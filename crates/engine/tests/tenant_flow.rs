@@ -12,7 +12,7 @@ use futures_executor::block_on;
 use serde_json::json;
 
 fn owner() -> Principal {
-    Principal { id: "test".to_string(), role: "owner".to_string(), scope: None, writer: None }
+    Principal { id: "test".to_string(), role: "owner".to_string(), scope: None, writer: None, tables: None }
 }
 
 fn engine() -> ServerlessEngine {
@@ -187,7 +187,7 @@ fn search_and_aggregate() {
 fn keys_and_auth() {
     block_on(async {
         let mut e = engine();
-        let (rec, secret) = e.issue_key("writer", None, None).await.unwrap();
+        let (rec, secret) = e.issue_key("writer", None, None, None).await.unwrap();
         assert_eq!(e.list_keys().await.unwrap().len(), 1);
         let princ = e.resolve_principal(Some(&secret), None).await.unwrap();
         assert_eq!(princ.role, "writer");

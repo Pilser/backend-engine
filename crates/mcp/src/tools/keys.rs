@@ -16,6 +16,7 @@ pub async fn list(
                 "name": k.bucket,
                 "role": k.role,
                 "scope": k.scope,
+                "tables": k.tables,
                 "revoked": k.revoked_at.is_some(),
             })
 
@@ -32,8 +33,11 @@ pub async fn issue(
     let role = arguments.get("role").and_then(|r| r.as_str()).unwrap_or("writer");
     let writer = arguments.get("writer").and_then(|w| w.as_str());
     let scope = arguments.get("scope").and_then(|s| s.as_str());
-    let (kr, secret) = engine.issue_key(role, writer, scope).await.map_err(|e| e.to_string())?;
-    ok(json!({ "bucket": kr.bucket, "key": secret, "role": kr.role, "writer": kr.writer, "scope": kr.scope }))
+    let tables = arguments.get("tables").and_then(|v| v.as_array()).map(|a| {
+        a.iter().filter_map(|x| x.as_str().map(String::from)).collect::<Vec<_>>()
+    });
+    let (kr, secret) = engine.issue_key(role, writer, scope, tables).await.map_err(|e| e.to_string())?;
+    ok(json!({ "bucket": kr.bucket, "key": secret, "role": kr.role, "writer": kr.writer, "scope": kr.scope, "tables": kr.tables }))
 }
 
 pub async fn show(

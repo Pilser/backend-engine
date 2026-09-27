@@ -54,7 +54,14 @@ pub async fn tables_list(req: Request, ctx: RouteContext<()>) -> Result<Response
         return Ok(cors::deny("reader authorization required"));
     }
     Ok(match app.engine.list_tables().await {
-        Ok(tables) => cors::ok(json!({ "ok": true, "tables": tables })),
+        Ok(tables) => {
+            // Table-scoped keys (S2) only see their tables.
+            let tables: Vec<_> = tables
+                .into_iter()
+                .filter(|t| app.principal.allows_table(&t.table))
+                .collect();
+            cors::ok(json!({ "ok": true, "tables": tables }))
+        }
         Err(e) => cors::srv(&e),
     })
 }
@@ -81,13 +88,15 @@ pub async fn tables_create(req: Request, ctx: RouteContext<()>) -> Result<Respon
     let unique_key = body.get("unique_key").and_then(|u| u.as_str());
     Ok(match app.engine.create_table(&table, schema, unique_key).await {
         Ok(cfg) => {
-            if body.get("public_read").is_some() || body.get("write_only").is_some() {
+            if body.get("public_read").is_some()
+                || body.get("write_only").is_some()
+                || body.get("allow_anon_submit").is_some()
+            {
                 let mut patch = serde_json::Map::new();
-                if let Some(v) = body.get("public_read") {
-                    patch.insert("public_read".into(), v.clone());
-                }
-                if let Some(v) = body.get("write_only") {
-                    patch.insert("write_only".into(), v.clone());
+                for k in ["public_read", "write_only", "allow_anon_submit"] {
+                    if let Some(v) = body.get(k) {
+                        patch.insert(k.into(), v.clone());
+                    }
                 }
                 if let Err(e) = app.engine.set_table_policy(&table, &Json::Object(patch)).await {
                     return Ok(cors::bad(&e));
@@ -134,6 +143,9 @@ pub async fn tables_show(req: Request, ctx: RouteContext<()>) -> Result<Response
     };
     if !auth::require_read(&app.principal) {
         return Ok(cors::deny("reader authorization required"));
+    }
+    if !app.principal.allows_table(&table) {
+        return Ok(cors::gone("table not found"));
     }
     Ok(match app.engine.get_table(&table).await {
         Ok(Some(cfg)) => cors::ok(json!({ "ok": true, "table": cfg })),

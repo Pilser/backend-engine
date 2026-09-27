@@ -44,7 +44,7 @@ fn text_body(raw: &str) -> String {
 }
 
 fn sys_principal() -> Principal {
-    Principal { id: engine::TENANT.to_string(), role: "owner".to_string(), scope: None, writer: None }
+    Principal { id: engine::TENANT.to_string(), role: "owner".to_string(), scope: None, writer: None, tables: None }
 }
 
 pub async fn handle(message: ForwardableEmailMessage, env: &Env) -> Result<()> {

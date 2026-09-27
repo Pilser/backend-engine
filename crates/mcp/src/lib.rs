@@ -59,6 +59,7 @@ impl McpServer {
             role: "owner".to_string(),
             scope: None,
             writer: None,
+            tables: None,
         }
     }
 

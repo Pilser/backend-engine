@@ -71,7 +71,8 @@ pub fn validate_rules(cfg: &TableConfig, payload: &Json) -> anyhow::Result<()> {
 /// controls all writers. Supported keywords (everything else is ignored):
 /// `type` (string or array), `required`, `properties` (recursive),
 /// `items` (single schema, applied to every element), `enum`,
-/// `minimum`/`maximum` (numbers), `minLength`/`maxLength` (strings).
+/// `minimum`/`maximum` (numbers), `minLength`/`maxLength`/`format: email`
+/// (strings).
 pub fn validate_schema(cfg: &TableConfig, payload: &Json) -> anyhow::Result<()> {
     let Some(schema) = cfg.schema_json.as_ref() else {
         return Ok(());
@@ -80,6 +81,24 @@ pub fn validate_schema(cfg: &TableConfig, payload: &Json) -> anyhow::Result<()> 
         anyhow::bail!("table '{}' has an invalid schema_json: schema must be an object", cfg.table);
     };
     check_node(obj, payload, "$").map_err(|e| anyhow::anyhow!("payload failed schema: {e}"))
+}
+
+/// Pragmatic email check (no regex crate on purpose): exactly one `@`,
+/// non-empty local/domain parts, dotted domain, no whitespace. Catches
+/// typos and garbage at the edge; deep deliverability stays the mail
+/// provider's job.
+fn is_email(s: &str) -> bool {
+    if s.is_empty() || s.len() > 254 || s.bytes().any(|b| b.is_ascii_whitespace() || b < 33) {
+        return false;
+    }
+    let mut parts = s.split('@');
+    let (Some(local), Some(domain), None) = (parts.next(), parts.next(), parts.next()) else {
+        return false;
+    };
+    if local.is_empty() || domain.len() < 3 || !domain.contains('.') {
+        return false;
+    }
+    !(local.starts_with('.') || local.ends_with('.') || domain.starts_with('.') || domain.ends_with('.'))
 }
 
 fn check_node(schema: &serde_json::Map<String, Json>, value: &Json, path: &str) -> anyhow::Result<()> {
@@ -123,6 +142,9 @@ fn check_node(schema: &serde_json::Map<String, Json>, value: &Json, path: &str) 
             }
         }
         Json::String(s) => {
+            if schema.get("format").and_then(|v| v.as_str()) == Some("email") && !is_email(s) {
+                anyhow::bail!("{path}: not a valid email address");
+            }
             if let Some(min) = schema.get("minLength").and_then(|v| v.as_u64()) {
                 if (s.chars().count() as u64) < min {
                     anyhow::bail!("{path}: string shorter than minLength {min}");
@@ -248,6 +270,7 @@ pub async fn policy_set(
     table: &str,
     public_read: Option<&Json>,
     write_only: Option<&Json>,
+    allow_anon_submit: Option<&Json>,
 ) -> anyhow::Result<()> {
     fn opt_bool(name: &str, v: &Json) -> anyhow::Result<Option<bool>> {
         if v.is_null() {
@@ -261,12 +284,16 @@ pub async fn policy_set(
     // None = untouched; Some(None) = clear; Some(Some(b)) = set.
     let pr = public_read.map(|v| opt_bool("public_read", v)).transpose()?;
     let wo = write_only.map(|v| opt_bool("write_only", v)).transpose()?;
+    let an = allow_anon_submit.map(|v| opt_bool("allow_anon_submit", v)).transpose()?;
     save_table_config(db, table, |c| {
         if let Some(v) = pr {
             c.public_read = v;
         }
         if let Some(v) = wo {
             c.write_only = v;
+        }
+        if let Some(v) = an {
+            c.allow_anon_submit = v;
         }
     })
     .await

@@ -46,9 +46,12 @@ pub async fn issue_key(req: Request, ctx: RouteContext<()>) -> Result<Response> 
     let role = body.get("role").and_then(|r| r.as_str()).unwrap_or("writer").to_string();
     let writer = body.get("writer").and_then(|w| w.as_str()).map(String::from);
     let scope = body.get("scope").and_then(|s| s.as_str()).map(String::from);
-    Ok(match app.engine.issue_key(&role, writer.as_deref(), scope.as_deref()).await {
+    let tables = body.get("tables").and_then(|v| v.as_array()).map(|a| {
+        a.iter().filter_map(|x| x.as_str().map(String::from)).collect::<Vec<_>>()
+    });
+    Ok(match app.engine.issue_key(&role, writer.as_deref(), scope.as_deref(), tables).await {
         Ok((kr, secret)) => cors::created(
-            json!({ "ok": true, "bucket": kr.bucket, "key": secret, "role": kr.role, "writer": kr.writer, "scope": kr.scope }),
+            json!({ "ok": true, "bucket": kr.bucket, "key": secret, "role": kr.role, "writer": kr.writer, "scope": kr.scope, "tables": kr.tables }),
         ),
         Err(e) => cors::bad(&e),
     })
@@ -71,6 +74,7 @@ pub async fn list_keys(req: Request, ctx: RouteContext<()>) -> Result<Response> 
                         "name": k.bucket,
                         "role": k.role,
                         "scope": k.scope,
+                        "tables": k.tables,
                         "writer": k.writer,
                         "revoked": k.revoked_at.is_some(),
                         "revoked_at": k.revoked_at,

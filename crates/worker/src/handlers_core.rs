@@ -224,6 +224,10 @@ pub async fn upload(mut req: Request, ctx: RouteContext<()>) -> Result<Response>
         return Ok(cors::err(413, "file too large (25 MiB max)"));
     }
     let table = p.get("table").map(|s| s.as_str()).unwrap_or("files").to_string();
+    // Uploads land as records in a table — table-scoped keys (S2) stay scoped.
+    if !app.principal.allows_table(&table) {
+        return Ok(cors::deny("key scope excludes this table"));
+    }
     let content_type = req
         .headers()
         .get("content-type")

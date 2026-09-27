@@ -20,7 +20,7 @@ pub const TABLE_PLUGINS: &str = "plugins";
 pub const TABLE_ROUTES: &str = "plugin_routes";
 
 fn sys_principal() -> Principal {
-    Principal { id: crate::TENANT.to_string(), role: "owner".to_string(), scope: None, writer: None }
+    Principal { id: crate::TENANT.to_string(), role: "owner".to_string(), scope: None, writer: None, tables: None }
 }
 
 fn valid_slug(slug: &str) -> bool {

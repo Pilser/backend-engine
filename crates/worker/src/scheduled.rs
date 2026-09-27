@@ -160,6 +160,7 @@ async fn run_job(engine: &mut ServerlessEngine, job: engine::model::Job) {
                                     role: "writer".to_string(),
                                     scope: None,
                                     writer: Some(format!("job:{}", job.name)),
+                                    tables: None,
                                 };
                                 match engine
                                     .insert_record(

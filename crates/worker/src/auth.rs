@@ -100,6 +100,7 @@ pub async fn context(env: &Env, req: &Request, scope: Option<String>) -> std::re
                     role: "admin".to_string(),
                     scope,
                     writer: None,
+                    tables: None,
                 },
             });
         }
@@ -108,7 +109,7 @@ pub async fn context(env: &Env, req: &Request, scope: Option<String>) -> std::re
     let principal = engine
         .resolve_principal(token.as_deref(), scope.as_deref())
         .await
-        .unwrap_or(Principal { id: "anon".to_string(), role: "none".to_string(), scope: None, writer: None });
+        .unwrap_or(Principal { id: "anon".to_string(), role: "none".to_string(), scope: None, writer: None, tables: None });
     Ok(Ctx { engine, principal })
 }
 
@@ -172,6 +173,10 @@ pub async fn can_table_read(ctx: &mut Ctx, table: &str) -> bool {
     if admin {
         return true;
     }
+    // Table-scoped keys (S2) see only their tables — checked before roles.
+    if !ctx.principal.allows_table(table) {
+        return false;
+    }
     let reader = require_read(&ctx.principal);
     let cfg = ctx.engine.get_table(table).await.unwrap_or(None);
     match cfg {
@@ -199,6 +204,9 @@ pub async fn can_table_read(ctx: &mut Ctx, table: &str) -> bool {
 /// Submit gate (S1): writers/admins always; `write_only` tables additionally
 /// allow anonymous submit (the inbox shape: insert without list).
 pub async fn can_table_submit(ctx: &Ctx, table: &str) -> bool {
+    if !ctx.principal.allows_table(table) {
+        return false;
+    }
     if require_write(&ctx.principal) {
         return true;
     }

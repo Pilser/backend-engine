@@ -27,6 +27,8 @@ token*
 node_modules/
 # Frontend build output (rebuilt by `bun run build:web`, uploaded by publish-frontend.sh)
 web/dist/
+# Private nested repos (track themselves; never commit here)
+.private/
 
 # Logs / OS
 *.log

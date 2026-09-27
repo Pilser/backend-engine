@@ -44,20 +44,33 @@ fn ensure_sql(table: &str) -> String {
     }
 }
 
-fn encode_key(key: &Key) -> String {
-    match key {
+/// Physical key namespacing (the vanishing-rows hunt, 2026-09-27).
+///
+/// ALL logical record tables share one physical table, but seqs are
+/// per-table — so bare `i1` keys collide across tables and `INSERT OR
+/// REPLACE` silently destroys other tables' rows (every table's seq-N row
+/// fought over one key; last writer won). Namespacing by logical table
+/// makes physical keys unique: `{table}/i{n}`.
+///
+/// `decode_key` stays backward-tolerant (strips any `{table}/` prefix, still
+/// reads legacy bare keys), so pre-fix rows remain readable; they get
+/// rewritten namespaced on next write.
+fn encode_key(table: &str, key: &Key) -> String {
+    let bare = match key {
         Key::Int(n) => format!("i{n}"),
         Key::Text(s) => format!("t:{s}"),
-    }
+    };
+    format!("{table}/{bare}")
 }
 
 fn decode_key(s: &str) -> Key {
-    if let Some(n) = s.strip_prefix('i').and_then(|r| r.parse::<i64>().ok()) {
+    let bare = s.rsplit('/').next().unwrap_or(s);
+    if let Some(n) = bare.strip_prefix('i').and_then(|r| r.parse::<i64>().ok()) {
         Key::Int(n)
-    } else if let Some(rest) = s.strip_prefix("t:") {
+    } else if let Some(rest) = bare.strip_prefix("t:") {
         Key::Text(rest.to_string())
     } else {
-        Key::Text(s.to_string())
+        Key::Text(bare.to_string())
     }
 }
 
@@ -138,7 +151,7 @@ impl Database for D1Db {
             Key::Int(_) => Key::Int(seq),
             Key::Text(_) => row.key.clone(),
         };
-        let ks = encode_key(&key);
+        let ks = encode_key(table, &key);
         let data = serde_json::to_string(&row.data)?;
         let t = qt(table);
         let sql = format!("INSERT OR REPLACE INTO {t} (key, data) VALUES (?1, ?2)");
@@ -169,7 +182,7 @@ impl Database for D1Db {
                 Key::Text(_) => row.key.clone(),
             };
             seqs.push(seq);
-            payloads.push((encode_key(&key), serde_json::to_string(&row.data)?));
+            payloads.push((encode_key(table, &key), serde_json::to_string(&row.data)?));
         }
         let t = qt(table);
         for chunk in payloads.chunks(50) {
@@ -191,7 +204,7 @@ impl Database for D1Db {
     }
 
     async fn get(&self, table: &str, pk: &Key) -> anyhow::Result<Option<Row>> {
-        let ks = encode_key(pk);
+        let ks = encode_key(table, pk);
         let t = qt(table);
         let sql = format!("SELECT key, data FROM {t} WHERE key = ?1");
         let params = vec![D1Type::Text(ks.as_str())];
@@ -203,7 +216,7 @@ impl Database for D1Db {
     }
 
     async fn update(&mut self, table: &str, pk: &Key, patch: &serde_json::Value) -> anyhow::Result<()> {
-        let ks = encode_key(pk);
+        let ks = encode_key(table, pk);
         let data = serde_json::to_string(patch)?;
         let t = qt(table);
         let sql = format!("UPDATE {t} SET data = ?1 WHERE key = ?2");
@@ -230,7 +243,7 @@ impl Database for D1Db {
         let doomed: Vec<String> = rows
             .into_iter()
             .filter(|row| filter.matches(&engine::storage::memory::match_view(&row.data)))
-            .map(|row| encode_key(&row.key))
+            .map(|row| encode_key(table, &row.key))
             .collect();
         if doomed.is_empty() {
             return Ok(0);
@@ -276,7 +289,7 @@ impl Database for D1Db {
                 Key::Int(v) => *v,
                 Key::Text(_) => 0,
             };
-            let eks = encode_key(&existing.key);
+            let eks = encode_key(table, &existing.key);
             let data = serde_json::to_string(&row.data)?;
             row.key = existing.key.clone();
             let sql = format!("UPDATE {t} SET data = ?1 WHERE key = ?2");

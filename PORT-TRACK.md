@@ -231,6 +231,27 @@ curl -H "$K" -X POST $BASE/api/secrets -d '{"name":"OAUTH_CLIENT_ID","value":"<i
 - [x] fixed adjacent leak: MCP `keys.show` exposed `key_hash`/`salt`
 - [x] tests updated; native + `--tests` + wasm green, graphs clean
 
+## Vanishing-rows hunt (2026-09-27) — PROVEN: cross-table key collision
+
+- Symptom: rows disappeared hours after being served (plugin routes,
+  plugin records, notes, files) with no deleter in any code path.
+- Red herrings eliminated with evidence: TTL sweep (skips null-ttl),
+  cron ticks (demo has no firing paths that delete), filtered deletes
+  (never called), listing bugs (sqlite ground truth agreed with API),
+  miniflare persistence (graceful restart keeps everything; Per-write
+  persistence confirmed — a row written seconds before SIGKILL survived).
+- Root cause: ALL logical record tables share one physical `wb_records`
+  table keyed by bare per-table seqs (`i1`, `i2`, …) written with
+  `INSERT OR REPLACE`. Every table's seq-N row fought over one key —
+  last writer won, others vanished silently. Proven live: two rows into
+  fresh table `hunt2` (seqs 1,2) deleted `hunt`'s m1/m2 within seconds.
+  The memory adapter (per-table maps) never had it — contract tests
+  passed because no test used two tables with overlapping seqs.
+- Fix: D1 physical keys namespaced `{table}/i{n}` (`encode_key` takes
+  table; `decode_key` backward-tolerant, old rows stay readable).
+  Contract locked by `same_seq_across_tables_stays_isolated`.
+- Lesson: multi-table same-seq tests are mandatory for every adapter.
+
 ## Filter-level bug (2026-09-27) — `eq` never matched on any adapter
 
 - Found while verifying Phase 4 route AND-filters: `eq` on payload fields

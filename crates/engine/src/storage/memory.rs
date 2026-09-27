@@ -143,6 +143,27 @@ impl Database for InMemoryDatabase {
     }
 }
 
+/// Field paths (`$.item`) address a record's PAYLOAD, but envelope metadata
+/// (`$.table` for table scoping, `$.seq`, `$.created_at`) must keep matching
+/// too. Merge payload over envelope — user fields win, metadata fills the
+/// gaps. Config rows (no `payload` wrapper) pass through untouched.
+/// (Without this, `eq` on payload fields resolves Null: `eq` never matches
+/// while `neq` matches everything — D1 and memory diverged silently.)
+pub fn match_view(data: &serde_json::Value) -> serde_json::Value {
+    let (Some(env), Some(p)) =
+        (data.as_object(), data.get("payload").and_then(|v| v.as_object()))
+    else {
+        return data.clone();
+    };
+    let mut m = p.clone();
+    for (k, v) in env {
+        if k != "payload" {
+            m.entry(k.clone()).or_insert_with(|| v.clone());
+        }
+    }
+    serde_json::Value::Object(m)
+}
+
 /// Apply a [`Query`]'s filter (incl. read-time TTL), ordering, and pagination
 /// to already-fetched rows — the exact semantics of [`InMemoryDatabase::query`].
 /// Backends that fetch-then-filter (e.g. D1) reuse this so every adapter
@@ -151,7 +172,7 @@ pub fn apply_query(rows: Vec<Row>, q: &Query) -> Cursor {
     let now = crate::crud::now_str();
     let mut rows: Vec<Row> = rows
         .into_iter()
-        .filter(|r| q.filter.matches(&r.data))
+        .filter(|r| q.filter.matches(&match_view(&r.data)))
         .filter(|r| memory_ttl_alive(q.ttl.as_ref(), &r.data, &now))
         .collect();
     if !q.orders.is_empty() {
@@ -215,8 +236,8 @@ fn memory_ttl_alive(ttl: Option<&crate::storage::database::TtlClause>, data: &se
 
 fn compare_rows(a: &Row, b: &Row, orders: &[(String, bool)]) -> std::cmp::Ordering {
     for (field, desc) in orders {
-        let va = crate::expr::get_path(&a.data, field);
-        let vb = crate::expr::get_path(&b.data, field);
+        let va = crate::expr::get_path(&match_view(&a.data), field);
+        let vb = crate::expr::get_path(&match_view(&b.data), field);
         let ord = compare_scalar(&va, &vb);
         if ord != std::cmp::Ordering::Equal {
             return if *desc { ord.reverse() } else { ord };

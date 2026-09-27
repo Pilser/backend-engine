@@ -229,7 +229,7 @@ impl Database for D1Db {
             r.results::<DataRow>()?.into_iter().map(parse_row).collect::<anyhow::Result<_>>()?;
         let doomed: Vec<String> = rows
             .into_iter()
-            .filter(|row| filter.matches(&row.data))
+            .filter(|row| filter.matches(&engine::storage::memory::match_view(&row.data)))
             .map(|row| encode_key(&row.key))
             .collect();
         if doomed.is_empty() {

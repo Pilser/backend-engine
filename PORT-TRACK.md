@@ -231,6 +231,20 @@ curl -H "$K" -X POST $BASE/api/secrets -d '{"name":"OAUTH_CLIENT_ID","value":"<i
 - [x] fixed adjacent leak: MCP `keys.show` exposed `key_hash`/`salt`
 - [x] tests updated; native + `--tests` + wasm green, graphs clean
 
+## Filter-level bug (2026-09-27) — `eq` never matched on any adapter
+
+- Found while verifying Phase 4 route AND-filters: `eq` on payload fields
+  returned [] while `neq` matched everything and `search` worked.
+- Root cause: shared `apply_query` (and D1 `delete`) matched filters
+  against the record ENVELOPE (`{table, seq, payload, …}`), so `$.field`
+  resolved Null. Unit tests never caught it — they call `matches()` on
+  bare payloads, never through adapters.
+- Fix: `match_view` merges payload over envelope (user fields win,
+  `$.table`/`$.seq`/`$.created_at` still match) in `apply_query`,
+  `compare_rows`, and D1 `delete`. Regression tests in
+  `crates/engine/tests/record_filter.rs`.
+- Lesson: adapter-level filter tests, not just IR unit tests.
+
 ## Plugin-native program (2026-09-27) — email + plugins in-engine
 
 - Phase 1 (done): `$send_email` recipe action (resend|mailchannels via

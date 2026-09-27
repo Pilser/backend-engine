@@ -748,6 +748,14 @@ impl ServerlessEngine {
         let (status, body) =
             crate::http::http_call_body(&call.url, &call.headers, &crate::http::HttpBody::Json(call.body), 15_000)
                 .await?;
+        // Direct sends (CLI/REST) fail loudly on provider rejection; the
+        // recipe action instead records the status on `$.email_result`
+        // ($call semantics: visible, non-fatal).
+        if !(200..300).contains(&status) {
+            let msg = body.to_string();
+            let short = msg.chars().take(300).collect::<String>();
+            anyhow::bail!("{} rejected the send (HTTP {status}): {short}", call.provider);
+        }
         Ok(serde_json::json!({ "provider": call.provider, "status": status, "body": body }))
     }
 

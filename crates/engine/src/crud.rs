@@ -88,6 +88,18 @@ pub(crate) async fn scan_rows(db: &dyn Database, table: &str) -> anyhow::Result<
     Ok(db.query(TABLE_RECORDS, &q).await?.rows)
 }
 
+/// Storage key for a record row: composite `{table}/r{seq:020}`.
+///
+/// All logical record tables share one physical table, but seqs restart
+/// per table — bare `iN` keys collided across tables and `INSERT OR REPLACE`
+/// silently destroyed other tables' rows (the vanishing-rows hunt,
+/// 2026-09-27). Composite keys make every row globally unique while keeping
+/// `Record.seq` (from the envelope, never the key) untouched. Zero-padded
+/// so key ordering still equals recency ordering.
+pub fn record_key(table: &str, seq: i64) -> Key {
+    Key::Text(format!("{table}/r{seq:020}"))
+}
+
 fn stored_record_json(
     table: &str,
     seq: i64,
@@ -332,7 +344,7 @@ pub async fn record_insert(
     }
     let seq = next_seq(db, table).await?;
     let stored = stored_record_json(table, seq, &prepared, &now_str(), writer);
-    db.insert(TABLE_RECORDS, Row::new(Key::Int(seq), stored)).await?;
+    db.insert(TABLE_RECORDS, Row::new(record_key(table, seq), stored)).await?;
     crate::audit::append(
         db,
         "created",
@@ -402,7 +414,7 @@ async fn record_insert_at_seq(
         crate::schema::check_unique(db, &cfg, &prepared, None).await?;
     }
     let stored = stored_record_json(table, seq, &prepared, &now_str(), writer);
-    db.insert(TABLE_RECORDS, Row::new(Key::Int(seq), stored)).await?;
+    db.insert(TABLE_RECORDS, Row::new(record_key(table, seq), stored)).await?;
     crate::audit::append(
         db,
         "created",
@@ -437,7 +449,7 @@ pub async fn record_bulk_import(
         let mut prepared = crate::schema::prepare_payload(db, &cfg, payload)?;
         crate::auth::force_scope(principal, &mut prepared);
         rows.push(Row::new(
-            Key::Int(seq),
+            record_key(table, seq),
             stored_record_json(table, seq, &prepared, &created, writer),
         ));
         seqs.push(seq);
@@ -475,7 +487,7 @@ pub async fn record_set(
     let created_at = current.created_at.unwrap_or_default();
     let stored = stored_record_json(table, seq, &prepared, &created_at, writer);
     db.delete(TABLE_RECORDS, &exact_filter(table, seq)).await?;
-    db.insert(TABLE_RECORDS, Row::new(Key::Int(seq), stored)).await?;
+    db.insert(TABLE_RECORDS, Row::new(record_key(table, seq), stored)).await?;
     crate::audit::append(db, "updated", None, writer, Some(&sha256_hex(&prepared))).await?;
     crate::automation::dispatch(db, table, crate::events::EventKind::Updated, Some(seq), Some(prepared.clone())).await?;
     crate::webhooks::fire_hooks(db, &prepared).await?;
@@ -500,7 +512,7 @@ pub async fn record_patch(
     let created_at = current.created_at.unwrap_or_default();
     let stored = stored_record_json(table, seq, &merged, &created_at, resolved_writer);
     db.delete(TABLE_RECORDS, &exact_filter(table, seq)).await?;
-    db.insert(TABLE_RECORDS, Row::new(Key::Int(seq), stored)).await?;
+    db.insert(TABLE_RECORDS, Row::new(record_key(table, seq), stored)).await?;
     crate::audit::append(db, "updated", None, resolved_writer, Some(&sha256_hex(&merged))).await?;
     crate::automation::dispatch(db, table, crate::events::EventKind::Updated, Some(seq), Some(merged.clone())).await?;
     crate::webhooks::fire_hooks(db, &merged).await?;
@@ -664,7 +676,7 @@ pub async fn record_set_raw(
     // add-or-update on `_srv_key`+`table`, so a plain insert refreshes the
     // node's data (including mirrors) without a delete that could race with
     // the just-completed insert during a create-triggered recipe write-back.
-    db.insert(TABLE_RECORDS, Row::new(Key::Int(seq), stored)).await?;
+    db.insert(TABLE_RECORDS, Row::new(record_key(table, seq), stored)).await?;
     Ok(())
 }
 
@@ -710,7 +722,7 @@ pub async fn record_patch_first_raw(
     let created_at = rec.created_at.unwrap_or_default();
     let stored = stored_record_json(table, rec.seq, &merged, &created_at, rec.writer.as_deref());
     db.delete(TABLE_RECORDS, &exact_filter(table, rec.seq)).await?;
-    db.insert(TABLE_RECORDS, Row::new(Key::Int(rec.seq), stored)).await?;
+    db.insert(TABLE_RECORDS, Row::new(record_key(table, rec.seq), stored)).await?;
     Ok(Some(merged))
 }
 

@@ -56,11 +56,14 @@ fn ensure_sql(table: &str) -> String {
 /// reads legacy bare keys), so pre-fix rows remain readable; they get
 /// rewritten namespaced on next write.
 fn encode_key(table: &str, key: &Key) -> String {
-    let bare = match key {
-        Key::Int(n) => format!("i{n}"),
-        Key::Text(s) => format!("t:{s}"),
-    };
-    format!("{table}/{bare}")
+    match key {
+        // Zero-padded so key ordering still equals recency ordering.
+        Key::Int(n) => format!("{table}/i{n:020}"),
+        // Composite record keys (`{table}/r{seq:020}` from crud) and any
+        // other slashed form pass through under the physical prefix.
+        Key::Text(s) if s.contains('/') => format!("{table}/{s}"),
+        Key::Text(s) => format!("{table}/t:{s}"),
+    }
 }
 
 fn decode_key(s: &str) -> Key {
@@ -84,10 +87,14 @@ fn legacy_encode_key(key: &Key) -> String {
     }
 }
 
-/// Canonical dedupe key: logical identity ignoring the namespace prefix.
+/// Canonical dedupe key: logical identity across all key generations —
+/// bare (`i6`), 0.2.3 (`wb_records/i6`), padded (`wb_records/i000...006`)
+/// all canonicalize per decoded value; composite record keys stay distinct.
 fn logical_key(raw: &str) -> String {
-    let bare = raw.rsplit('/').next().unwrap_or(raw);
-    bare.to_string()
+    match decode_key(raw) {
+        Key::Int(n) => format!("i{n}"),
+        Key::Text(s) => format!("t:{s}"),
+    }
 }
 
 /// Drop shadow duplicates: same logical key present bare (pre-0.2.3) and

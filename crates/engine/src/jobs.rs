@@ -157,7 +157,10 @@ pub async fn job_run_insert(
         "message": message,
         "result": result,
     });
-    db.insert(TABLE_JOB_RUNS, Row::new(Key::Int(0), data)).await?;
+    // Unique key per run: a constant key here meant every run overwrote the
+    // last (same shared-table REPLACE collision as records had).
+    let key = format!("{job_name}@{triggered_at}@{}", &uuid::Uuid::new_v4().to_string()[..8]);
+    db.insert(TABLE_JOB_RUNS, Row::new(Key::Text(key), data)).await?;
     Ok(())
 }
 

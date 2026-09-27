@@ -277,7 +277,16 @@ curl -H "$K" -X POST $BASE/api/secrets -d '{"name":"OAUTH_CLIENT_ID","value":"<i
 - Fix: D1 physical keys namespaced `{table}/i{n}` (`encode_key` takes
   table; `decode_key` backward-tolerant, old rows stay readable).
   Contract locked by `same_seq_across_tables_stays_isolated`.
-- Lesson: multi-table same-seq tests are mandatory for every adapter.
+- CORRECTION (same day): v0.2.3's namespacing used the PHYSICAL table
+  (constant `wb_records` for all records) — useless, verified by re-reading
+  the adapter boundary. The logical table is only known in crud, so the
+  REAL fix is composite record keys `Key::Text("{table}/r{seq:020}")` at
+  insert time (v0.3.2), zero-padded to preserve ordering. Same hunt also
+  caught job-run history sharing one constant `Key::Int(0)` (kept only the
+  last run globally) — now unique per run. D1 encode/decode/dedupe updated
+  for all three key generations (bare, 0.2.3, composite).
+- Lesson: multi-table same-seq tests are mandatory for every adapter;
+  verify fixes at the layer that owns the missing context.
 
 ## Filter-level bug (2026-09-27) — `eq` never matched on any adapter
 

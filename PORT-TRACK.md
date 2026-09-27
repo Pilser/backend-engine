@@ -231,6 +231,16 @@ curl -H "$K" -X POST $BASE/api/secrets -d '{"name":"OAUTH_CLIENT_ID","value":"<i
 - [x] fixed adjacent leak: MCP `keys.show` exposed `key_hash`/`salt`
 - [x] tests updated; native + `--tests` + wasm green, graphs clean
 
+## Key migration compat (2026-09-27) — v0.2.3 namespacing follow-up
+
+- v0.2.3 namespaced physical keys, but reads (get/update/delete-by-key)
+  only tried namespaced keys: pre-0.2.3 bare rows became invisible
+  (`plugins` ghosting, PATCH failing on old tables, ghost dupes in scans).
+- Fix: get/update try namespaced then legacy bare; update heals diverged
+  pairs (writes both forms); query scans dedupe preferring namespaced;
+  deletes use raw stored keys. Old rows stay readable forever and migrate
+  on next touch. No data migration needed (nothing in production yet).
+
 ## Security program (2026-09-27) — user-reported gaps, all built
 
 - S1 (P0): per-table `public_read` (overrides tenant both ways) +

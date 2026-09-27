@@ -74,6 +74,40 @@ fn decode_key(s: &str) -> Key {
     }
 }
 
+/// Pre-0.2.3 bare format (no table namespace). Reads fall back to it so
+/// rows written before key namespacing stay visible; every write path now
+/// stores namespaced keys, so legacy rows migrate on next touch.
+fn legacy_encode_key(key: &Key) -> String {
+    match key {
+        Key::Int(n) => format!("i{n}"),
+        Key::Text(s) => format!("t:{s}"),
+    }
+}
+
+/// Canonical dedupe key: logical identity ignoring the namespace prefix.
+fn logical_key(raw: &str) -> String {
+    let bare = raw.rsplit('/').next().unwrap_or(raw);
+    bare.to_string()
+}
+
+/// Drop shadow duplicates: same logical key present bare (pre-0.2.3) and
+/// namespaced — keep the namespaced (current) version.
+fn dedupe_rows(pairs: Vec<(String, Row)>) -> Vec<Row> {
+    use std::collections::HashMap;
+    let mut best: HashMap<String, (Row, bool)> = HashMap::new();
+    for (raw, row) in pairs.into_iter() {
+        let k = logical_key(&raw);
+        let namespaced = raw.contains('/');
+        match best.get(&k) {
+            Some((_, true)) if !namespaced => {}
+            _ => {
+                best.insert(k, (row, namespaced));
+            }
+        }
+    }
+    best.into_values().map(|(r, _)| r).collect()
+}
+
 #[derive(Deserialize)]
 struct DataRow {
     key: String,
@@ -204,23 +238,31 @@ impl Database for D1Db {
     }
 
     async fn get(&self, table: &str, pk: &Key) -> anyhow::Result<Option<Row>> {
-        let ks = encode_key(table, pk);
+        // Namespaced first, legacy bare fallback (pre-0.2.3 rows).
         let t = qt(table);
-        let sql = format!("SELECT key, data FROM {t} WHERE key = ?1");
-        let params = vec![D1Type::Text(ks.as_str())];
-        let stmt = self.db.prepare(sql).bind_refs(&params)?;
-        let results = self.batch_ensured(table, vec![stmt]).await?;
-        let r = results.into_iter().last().expect("batch returns one result per stmt");
-        let mut rows = r.results::<DataRow>()?;
-        Ok(rows.pop().map(parse_row).transpose()?)
+        for ks in [encode_key(table, pk), legacy_encode_key(pk)] {
+            let sql = format!("SELECT key, data FROM {t} WHERE key = ?1");
+            let params = vec![D1Type::Text(ks.as_str())];
+            let stmt = self.db.prepare(sql).bind_refs(&params)?;
+            let results = self.batch_ensured(table, vec![stmt]).await?;
+            let r = results.into_iter().last().expect("batch returns one result per stmt");
+            let mut rows = r.results::<DataRow>()?;
+            if let Some(row) = rows.pop() {
+                return parse_row(row).map(Some);
+            }
+        }
+        Ok(None)
     }
 
     async fn update(&mut self, table: &str, pk: &Key, patch: &serde_json::Value) -> anyhow::Result<()> {
-        let ks = encode_key(table, pk);
         let data = serde_json::to_string(patch)?;
         let t = qt(table);
-        let sql = format!("UPDATE {t} SET data = ?1 WHERE key = ?2");
-        let params = vec![D1Type::Text(data.as_str()), D1Type::Text(ks.as_str())];
+        // Write to BOTH key forms: heals diverged pairs (bare legacy +
+        // namespaced current) in one shot; exactly one matches normally.
+        let k1 = encode_key(table, pk);
+        let k2 = legacy_encode_key(pk);
+        let sql = format!("UPDATE {t} SET data = ?1 WHERE key = ?2 OR key = ?3");
+        let params = vec![D1Type::Text(data.as_str()), D1Type::Text(k1.as_str()), D1Type::Text(k2.as_str())];
         let stmt = self.db.prepare(sql).bind_refs(&params)?;
         let results = self.batch_ensured(table, vec![stmt]).await?;
         let r = results.into_iter().last().expect("batch returns one result per stmt");
@@ -238,12 +280,18 @@ impl Database for D1Db {
         let stmt = self.db.prepare(sql).bind_refs(&params)?;
         let results = self.batch_ensured(table, vec![stmt]).await?;
         let r = results.into_iter().last().expect("batch returns one result per stmt");
-        let rows: Vec<Row> =
-            r.results::<DataRow>()?.into_iter().map(parse_row).collect::<anyhow::Result<_>>()?;
-        let doomed: Vec<String> = rows
+        // Delete by RAW stored key (not re-encoded): legacy bare rows must
+        // match too, otherwise filtered deletes silently miss pre-0.2.3 rows.
+        let doomed: Vec<String> = r
+            .results::<DataRow>()?
             .into_iter()
-            .filter(|row| filter.matches(&engine::storage::memory::match_view(&row.data)))
-            .map(|row| encode_key(table, &row.key))
+            .filter_map(|dr| {
+                let raw = dr.key.clone();
+                parse_row(dr)
+                    .ok()
+                    .filter(|row| filter.matches(&engine::storage::memory::match_view(&row.data)))
+                    .map(|_| raw)
+            })
             .collect();
         if doomed.is_empty() {
             return Ok(0);
@@ -270,9 +318,15 @@ impl Database for D1Db {
         let stmt = self.db.prepare(sql).bind_refs(&params)?;
         let results = self.batch_ensured(table, vec![stmt]).await?;
         let r = results.into_iter().last().expect("batch returns one result per stmt");
-        let rows: Vec<Row> =
-            r.results::<DataRow>()?.into_iter().map(parse_row).collect::<anyhow::Result<_>>()?;
-        Ok(apply_query(rows, q))
+        let pairs: Vec<(String, Row)> = r
+            .results::<DataRow>()?
+            .into_iter()
+            .map(|dr| {
+                let raw = dr.key.clone();
+                parse_row(dr).map(|row| (raw, row))
+            })
+            .collect::<anyhow::Result<_>>()?;
+        Ok(apply_query(dedupe_rows(pairs), q))
     }
 
     async fn upsert(&mut self, table: &str, key: &str, mut row: Row) -> anyhow::Result<i64> {

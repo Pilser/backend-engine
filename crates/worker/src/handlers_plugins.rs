@@ -105,6 +105,23 @@ pub async fn call(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     }
     let op = binding.get("op").and_then(|v| v.as_str()).unwrap_or("");
     let p = query::params(&req);
+    // Base binding filter ANDs with any caller ?filter=. A Null merge means
+    // "no filter" (parse_filter rejects Null — empty conds instead).
+    let client = p.get("filter").filter(|s| !s.is_empty()).map(|s| {
+        serde_json::from_str(s).unwrap_or(Json::Null)
+    });
+    let merged = engine::plugins::merge_filter_json(binding.get("filter"), client.as_ref());
+    let mut conds = if merged.is_null() {
+        Vec::new()
+    } else {
+        match engine::storage::ir::parse_filter(&merged) {
+            Ok(f) => f.conds,
+            Err(e) => return Ok(cors::bad(&e)),
+        }
+    };
+    if let Some(c) = auth::scope_cond(&app.principal) {
+        conds.push(c);
+    }
     match op {
         "query" | "aggregate" => {
             if op == "query" {
@@ -113,17 +130,6 @@ pub async fn call(req: Request, ctx: RouteContext<()>) -> Result<Response> {
                 }
             } else if !auth::require_read(&app.principal) {
                 return Ok(cors::deny("reader authorization required"));
-            }
-            let client = p.get("filter").filter(|s| !s.is_empty()).map(|s| {
-                serde_json::from_str(s).unwrap_or(Json::Null)
-            });
-            let merged = engine::plugins::merge_filter_json(binding.get("filter"), client.as_ref());
-            let mut conds = match engine::storage::ir::parse_filter(&merged) {
-                Ok(f) => f.conds,
-                Err(e) => return Ok(cors::bad(&e)),
-            };
-            if let Some(c) = auth::scope_cond(&app.principal) {
-                conds.push(c);
             }
             if op == "aggregate" {
                 let agg = match engine::storage::ir::Agg::parse(p.get("op").map(|s| s.as_str()).unwrap_or("count")) {

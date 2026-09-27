@@ -9,7 +9,7 @@
       "name": "backend-engine-demo-example",
       "version": "0.1.0",
       "dependencies": {
-        "@pilser/backend-engine": "^0.1.1",
+        "@pilser/backend-engine": "^0.2.1",
       },
     },
     "web": {
@@ -128,7 +128,7 @@
 
     "@napi-rs/lzma-linux-x64-gnu": ["@napi-rs/lzma-linux-x64-gnu@1.5.1", "", { "os": "linux", "cpu": "x64" }, "sha512-oTXEIha4SsuXdTA4Iyskj0kpdx2yVXdhd75c2v3xGrHFfVMsbhTPZU/nMPL4sWKo4pBHm3aucLaqGlF696dTyQ=="],
 
-    "@pilser/backend-engine": ["@pilser/backend-engine@0.1.1", "", {}, "sha512-tBAMcE35iIA6nZrf693JtEObWRY4QYyW3VqY9TcP/LrNpao1MHQyDqEtL/aJImI3thN0I1fi2busEoF/DsRRig=="],
+    "@pilser/backend-engine": ["@pilser/backend-engine@0.2.1", "", {}, "sha512-R9Ed4yf+9NxVMiGkwwQx4o+GUAzrPC08HAx7ZrtIP0YFx7bgwZVyiwLQRYKAglQQzL6m3Z6fWDinZrLNVUFq1g=="],
 
     "@rolldown/pluginutils": ["@rolldown/pluginutils@1.0.0-beta.27", "", {}, "sha512-+d0F4MKMCbeVUJwG96uQ4SgAznZNSq93I3V+9NHA4OpvqG8mRCpGdKmK8l/dl02h2CCDHwW2FqilnTyDcAnqjA=="],
 

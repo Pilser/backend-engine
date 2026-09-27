@@ -13,6 +13,12 @@ one build, frontend included:
 bun install          # workspace root: backend + frontend deps, one lockfile
 ```
 
+> Upgrading the engine across minor versions (0.2.x → 0.3.x changed the
+> local key scheme)? Local dev data lives in `demo-example/.wrangler/state`
+> — wipe it for a clean slate (`rm -rf demo-example/.wrangler`). No
+> migration exists on purpose: pre-1.0, zero production data, wipe-and-go.
+> (Production D1 is unaffected by local dev state.)
+
 **Two servers in dev, one in production.** `bun run dev:engine` starts the
 engine (`wrangler dev :8788` — the API plus the uploaded SPA at `/srv/`).
 `bun run dev:web` starts Vite (`:5173` — the React source, proxying

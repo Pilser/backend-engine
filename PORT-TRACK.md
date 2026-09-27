@@ -231,6 +231,20 @@ curl -H "$K" -X POST $BASE/api/secrets -d '{"name":"OAUTH_CLIENT_ID","value":"<i
 - [x] fixed adjacent leak: MCP `keys.show` exposed `key_hash`/`salt`
 - [x] tests updated; native + `--tests` + wasm green, graphs clean
 
+## Migration question (2026-09-27) — user-tested 0.3.1→0.3.2 upgrade
+
+- Verdict: NO automated migration — not worthy. Zero production data
+  exists anywhere; impact is local dev DBs only (wipe `.wrangler/state`,
+  documented in demo README). Migration machinery pre-1.0 with no prod
+  data would be textbook over-engineering; minor-version bumps already
+  signal breaking changes.
+- What WAS worthy and got fixed: the reporter's ghost tables were real —
+  `decode_key` stripped the first `/`-segment unconditionally, mangling
+  legacy multi-slash Text keys (`t:singleton/hunt` → `hunt`) so scan
+  dedupe couldn't merge old+new pairs. Now a leading `t:` means "the
+  whole string is the key". Their 404s were absent rows in a dev DB
+  (nothing to find), not a code path — get/update already fall back.
+
 ## Key migration compat (2026-09-27) — v0.2.3 namespacing follow-up
 
 - v0.2.3 namespaced physical keys, but reads (get/update/delete-by-key)

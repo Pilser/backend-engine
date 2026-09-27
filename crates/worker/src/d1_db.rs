@@ -67,13 +67,19 @@ fn encode_key(table: &str, key: &Key) -> String {
 }
 
 fn decode_key(s: &str) -> Key {
-    let bare = s.rsplit('/').next().unwrap_or(s);
-    if let Some(n) = bare.strip_prefix('i').and_then(|r| r.parse::<i64>().ok()) {
+    // Legacy bare Text keys predate namespacing entirely (`t:singleton/x`
+    // may itself contain slashes) — a leading `t:` always means "the whole
+    // string is the key", never a namespace to strip.
+    if let Some(rest) = s.strip_prefix("t:") {
+        return Key::Text(format!("t:{rest}"));
+    }
+    let rest = s.split_once('/').map(|(_, r)| r).unwrap_or(s);
+    if let Some(n) = rest.strip_prefix('i').and_then(|r| r.parse::<i64>().ok()) {
         Key::Int(n)
-    } else if let Some(rest) = bare.strip_prefix("t:") {
-        Key::Text(rest.to_string())
+    } else if let Some(t) = rest.strip_prefix("t:") {
+        Key::Text(t.to_string())
     } else {
-        Key::Text(bare.to_string())
+        Key::Text(rest.to_string())
     }
 }
 

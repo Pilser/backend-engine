@@ -231,6 +231,17 @@ curl -H "$K" -X POST $BASE/api/secrets -d '{"name":"OAUTH_CLIENT_ID","value":"<i
 - [x] fixed adjacent leak: MCP `keys.show` exposed `key_hash`/`salt`
 - [x] tests updated; native + `--tests` + wasm green, graphs clean
 
+## Demoride on 0.4.2 (2026-09-29) — platform update via owner credentials
+
+- Logged into pilserlabs platform as demorider (owner-supplied account,
+  used only for updates), `update-engine latest` moved demoride
+  0.4.1 → 0.4.2; version endpoint truthful; knob behavior re-verified
+  live (anon 403 / keyed 200 on allow_roles route); tenant left tidy.
+- Process fix: NEVER batch file edits + git commit in one parallel
+  block — a race dropped docs/version from the v0.4.1 tag (behavior was
+  complete and proven live; only strings lagged). Verify tag contents
+  before announcing, bump-then-tag always.
+
 ## Keyed site routes (2026-09-28) — allow_roles knob, public default
 
 - `allow_roles` per route (validated at write, unknown names rejected):

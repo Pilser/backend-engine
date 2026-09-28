@@ -10,8 +10,6 @@ compatibility_date = "2026-09-01"
 command = "echo 'prebuilt binary — nothing to compile'"
 
 [vars]
-ASSETS_S_MAXAGE_HTML = "7"
-ASSETS_S_MAXAGE = "77"
 ENVIRONMENT = "production"
 HTTP_TIMEOUT_MS = "15000"
 WORKER_URL = "https://demo-example.REPLACE_ME_ACCOUNT.workers.dev"

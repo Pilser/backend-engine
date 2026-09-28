@@ -231,6 +231,22 @@ curl -H "$K" -X POST $BASE/api/secrets -d '{"name":"OAUTH_CLIENT_ID","value":"<i
 - [x] fixed adjacent leak: MCP `keys.show` exposed `key_hash`/`salt`
 - [x] tests updated; native + `--tests` + wasm green, graphs clean
 
+## Production probe (2026-09-28) — live demoride tenant, own D1+R2
+
+- Worker logic PROVEN correct on real Cloudflare: computed-sha
+  `If-None-Match` → `304, 0 bytes`; delete → immediate `404`
+  (invalidation works); tenant knobs persist via PATCH.
+- `ETag`/`s-maxage` ABSENT on 200s (header + query-key alike) while the
+  worker demonstrably computes them → stripped between worker and client.
+  Prime suspect: zone-level Transform Rules / Managed Headers on the
+  account (check dashboard), not engine code. No engine change made —
+  changing emit logic can't fix egress stripping.
+- Custom domain (`demoride.pilserlabs.com/srv/*`) serves PLATFORM content
+  (homepage bytes, no engine headers, `cf-cache-status: HIT`) — not the
+  engine. Engine `/srv/*` lives on `*.workers.dev`; test there.
+- Note: demoride tenant is currently PRIVATE — public-tenant observations
+  need the flag flipped first.
+
 ## Cache round 2 (2026-09-27) — tester retest follow-ups
 
 - HTML ETag missing on their tenant: NOT REPRODUCED on 0.3.6 (exact

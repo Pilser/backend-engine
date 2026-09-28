@@ -131,7 +131,8 @@ Manifest keys (validated up front, conflicts fail the install):
 
 Rules: paths start with `/`; exact beats longest-`/*`-prefix;
 `/api/*`, `/mcp`, `/srv/*`, `/ws`, `/healthz` are reserved (rejected).
-Same path twice (any owner) is a conflict error. Site routes are public
+Same path + same owner replaces (upsert, so re-PUT updates); same path +
+different owner is a conflict error (no silent shadowing). Site routes are public
 BY DEFAULT (anonymous + edge-cacheable). Per route, `allow_roles` tunes
 it: absent/empty stays public; `["reader"]` (or writer/admin) switches to
 keyed mode — caller must hold the tier, reads follow the caller (not

@@ -262,6 +262,21 @@ curl -H "$K" -X POST $BASE/api/secrets -d '{"name":"OAUTH_CLIENT_ID","value":"<i
 - Pilserlabs mapping: sitemap/robots// from engine data, plugin SEO
   diffused via query routes, `/docs/*`-style proxy without wrapper code.
 
+## HTML ETag on production (2026-09-29) — worker proven right, edge strips
+
+- Testers: no ETag on HTML (both doors), knob "ignored". Reproduced the
+  observation live, then disproved the worker half: computed-sha
+  If-None-Match → 304/0-bytes (twice), invalidation immediate,
+  knob persists. Serve logic (incl. minify check: bodies byte-identical,
+  so no transform) is correct on 0.4.2.
+- Remaining explanation is egress-side: ETag + s-maxage stripped between
+  worker and client on that zone (both auth modes). Concrete suspect for
+  their dashboard: Transform Rules / Managed Headers. No engine change —
+  nothing emitted differently could survive stripping.
+- Docs corrected: same-path same-owner = upsert (their "conflict" test
+  was correct behavior, wrong words in PLUGINS.md). 1010 quirk is their
+  WAF vs blank-UA urllib, not engine. D1 cap acknowledged as theirs.
+
 ## Custom domain cleared (2026-09-28) — routing fixed, all engine
 
 - After their routing fix: `/`, `/mcp`, `/srv/*`, `/api/*` on

@@ -34,6 +34,13 @@ pub struct Tenant {
     pub webhook_secret: Option<String>,
     #[serde(default)]
     pub created_at: Option<String>,
+    /// Shared-cache lifetimes for hosted assets (S3 follow-up: tenant-
+    /// reachable, since tenants can't set worker env). None = fall back to
+    /// ASSETS_S_MAXAGE* vars, then 60 (html) / 86400 (static) defaults.
+    #[serde(default)]
+    pub assets_s_maxage_html: Option<u64>,
+    #[serde(default)]
+    pub assets_s_maxage: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -144,20 +144,24 @@ pub async fn serve(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     // Shared-cache lifetime rides alongside (never instead of) the browser
     // directive; HTML revalidates fast so deploys surface, hashed assets
     // linger (exact-URL invalidation on put keeps them correct).
-    let s_maxage = |default: u64, var: &str| {
-        ctx.env
-            .var(var)
-            .ok()
-            .and_then(|v| v.to_string().parse::<u64>().ok())
+    // Tenant knob wins (tenants can't set worker env), then env var, then default.
+    let s_maxage = |tenant_val: Option<u64>, default: u64, var: &str| {
+        tenant_val
+            .or_else(|| {
+                ctx.env
+                    .var(var)
+                    .ok()
+                    .and_then(|v| v.to_string().parse::<u64>().ok())
+            })
             .unwrap_or(default)
     };
     if !public {
         return Ok(cors::asset_bytes(body, &content_type, cache, &etag));
     }
     let smax = if is_html {
-        s_maxage(60, "ASSETS_S_MAXAGE_HTML")
+        s_maxage(tenant.assets_s_maxage_html, 60, "ASSETS_S_MAXAGE_HTML")
     } else {
-        s_maxage(86400, "ASSETS_S_MAXAGE")
+        s_maxage(tenant.assets_s_maxage, 86400, "ASSETS_S_MAXAGE")
     };
     let cache = format!("{cache}, s-maxage={smax}");
     let cached = cors::asset_bytes(body.clone(), &content_type, &cache, &etag);

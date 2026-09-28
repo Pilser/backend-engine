@@ -348,3 +348,17 @@ fn links_and_rate() {
         assert!(limiter.check("k", "submit", &limits).is_err());
     });
 }
+
+#[test]
+fn tenant_asset_cache_knobs() {
+    block_on(async {
+        let mut e = engine();
+        e.update_tenant(&json!({"assets_s_maxage_html": 7, "assets_s_maxage": 77})).await.unwrap();
+        let t = e.tenant().await.unwrap();
+        assert_eq!((t.assets_s_maxage_html, t.assets_s_maxage), (Some(7), Some(77)));
+        e.update_tenant(&json!({"assets_s_maxage_html": null})).await.unwrap();
+        assert_eq!(e.tenant().await.unwrap().assets_s_maxage_html, None);
+        assert!(e.update_tenant(&json!({"assets_s_maxage": "soon"})).await.is_err());
+        assert!(e.update_tenant(&json!({"assets_s_maxage": -5})).await.is_err());
+    });
+}

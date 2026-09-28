@@ -437,13 +437,15 @@ pub async fn asset_get(req: Request, ctx: RouteContext<()>) -> Result<Response> 
     }
     // Validator = hash of the served bytes (uniform with /srv/): exact on
     // every adapter, verifiable with sha256sum. One read either way.
+    // Browser directive matches /srv/ per content type (html revalidates).
     Ok(match app.engine.get_asset(&rel).await {
         Ok(Some((data, ct))) => {
             let etag = crate::handlers_site::sha256_hex(&data);
             if cors::etag_matches(&req, &etag) {
                 return Ok(cors::not_modified(&etag));
             }
-            cors::asset_bytes(data, &ct, "public, max-age=3600", &etag)
+            let cache = if ct.starts_with("text/html") { "public, max-age=0" } else { "public, max-age=3600" };
+            cors::asset_bytes(data, &ct, cache, &etag)
         }
         Ok(None) => cors::gone("not found"),
         Err(e) => cors::bad(&e),

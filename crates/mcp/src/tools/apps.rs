@@ -67,6 +67,11 @@ pub async fn update(
     if let Some(v) = arguments.get("public_reads") {
         patch.insert("public_reads".to_string(), v.clone());
     }
+    for k in ["assets_s_maxage_html", "assets_s_maxage"] {
+        if let Some(v) = arguments.get(k) {
+            patch.insert(k.to_string(), v.clone());
+        }
+    }
     if !patch.is_empty() {
         engine.update_tenant(&Json::Object(patch)).await
             .map_err(|e| e.to_string())?;

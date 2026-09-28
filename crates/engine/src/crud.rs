@@ -213,6 +213,8 @@ pub async fn tenant_config(db: &mut dyn Database) -> anyhow::Result<Tenant> {
         audit: false,
         webhook_secret: None,
         created_at: Some(now_str()),
+        assets_s_maxage_html: None,
+        assets_s_maxage: None,
     };
     db.insert(TABLE_TENANT, Row::new(Key::text(crate::TENANT), serde_json::to_value(&tenant)?)).await?;
     Ok(tenant)
@@ -223,7 +225,7 @@ pub async fn save_tenant(db: &mut dyn Database, tenant: &Tenant) -> anyhow::Resu
     Ok(())
 }
 
-/// Patch tenant-level knobs (`title`, `public_reads`).
+/// Patch tenant-level knobs (`title`, `public_reads`, `assets_s_maxage*`).
 pub async fn tenant_update(db: &mut dyn Database, patch: &Json) -> anyhow::Result<()> {
     let mut updated = tenant_config(db).await?;
     let obj = patch
@@ -237,6 +239,20 @@ pub async fn tenant_update(db: &mut dyn Database, patch: &Json) -> anyhow::Resul
     if let Some(v) = obj.get("public_reads") {
         if let Some(b) = v.as_bool() {
             updated.public_reads = b;
+        }
+    }
+    for (key, slot) in [
+        ("assets_s_maxage_html", &mut updated.assets_s_maxage_html),
+        ("assets_s_maxage", &mut updated.assets_s_maxage),
+    ] {
+        if let Some(v) = obj.get(key) {
+            if v.is_null() {
+                *slot = None;
+            } else if let Some(n) = v.as_u64() {
+                *slot = Some(n);
+            } else {
+                anyhow::bail!("\"{key}\" must be a positive-seconds integer or null");
+            }
         }
     }
     save_tenant(db, &updated).await

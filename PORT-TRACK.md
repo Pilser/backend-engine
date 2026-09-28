@@ -231,6 +231,19 @@ curl -H "$K" -X POST $BASE/api/secrets -d '{"name":"OAUTH_CLIENT_ID","value":"<i
 - [x] fixed adjacent leak: MCP `keys.show` exposed `key_hash`/`salt`
 - [x] tests updated; native + `--tests` + wasm green, graphs clean
 
+## Cache round 2 (2026-09-27) — tester retest follow-ups
+
+- HTML ETag missing on their tenant: NOT REPRODUCED on 0.3.6 (exact
+  repro serves ETag locally) — stale deploy suspected (`GET /api/version`
+  decides). Statics' 64-hex ETags already prove 0.3.6 paths.
+- Secondary 1 (real): `/api/assets/*` served `max-age=3600` for HTML vs
+  `max-age=0` on `/srv/` — unified per content type on both doors.
+- Secondary 2 (real): `ASSETS_S_MAXAGE*` were deployer-only env. Now
+  tenant knobs (`PATCH /api/app`, `apps update`) win, env fallback,
+  defaults last. Old tenants deserialize fine.
+- Verified working per report: acceptance sequence, public-only s-maxage,
+  private isolation, sub-app invalidation, no query poisoning.
+
 ## Cache tester feedback (2026-09-27) — wrong-store tests + real HTML bug
 
 - Their invalidation repro used `files` verbs against `/srv/` URLs: two

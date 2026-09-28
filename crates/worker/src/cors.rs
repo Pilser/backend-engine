@@ -70,6 +70,56 @@ pub fn bytes(data: Vec<u8>, content_type: &str, cache: &str) -> Response {
         .unwrap_or_else(|_| err(500, "body encode failed"))
 }
 
+/// Static-asset bytes with a validator. `etag` is the opaque blob hash
+/// (memory sha256 / R2 http_etag); empty means "no validator available"
+/// (assets uploaded before validators existed — re-upload to gain one).
+pub fn asset_bytes(data: Vec<u8>, content_type: &str, cache: &str, etag: &str) -> Response {
+    let h = cors_headers();
+    let _ = h.set("content-type", content_type);
+    let _ = h.set("cache-control", cache);
+    if !etag.is_empty() {
+        let _ = h.set("etag", &format!("\"{etag}\""));
+    }
+    Response::from_bytes(data)
+        .map(|r| r.with_headers(h).with_status(200))
+        .unwrap_or_else(|_| err(500, "body encode failed"))
+}
+
+/// 304 for a validator match — carries no bytes (safe on private apps too).
+pub fn not_modified(etag: &str) -> Response {
+    let h = cors_headers();
+    if !etag.is_empty() {
+        let _ = h.set("etag", &format!("\"{etag}\""));
+    }
+    Response::empty().unwrap().with_headers(h).with_status(304)
+}
+
+/// True when the request's If-None-Match allows a 304 for this validator.
+/// Handles `*`, single and list forms, weak (`W/`) prefixes, quoting.
+pub fn etag_matches(req: &worker::Request, etag: &str) -> bool {
+    if etag.is_empty() {
+        return false;
+    }
+    let inm = req
+        .headers()
+        .get("if-none-match")
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let inm = inm.trim();
+    if inm.is_empty() {
+        return false;
+    }
+    if inm == "*" {
+        return true;
+    }
+    let quoted = format!("\"{etag}\"");
+    inm.split(',').any(|t| {
+        let t = t.trim();
+        t == quoted || t == etag || t.strip_prefix("W/").map(|w| w == quoted || w == etag).unwrap_or(false)
+    })
+}
+
 pub fn redirect_to(location: &str) -> Response {
     let h = cors_headers();
     let _ = h.set("location", location);

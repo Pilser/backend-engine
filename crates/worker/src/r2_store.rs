@@ -56,9 +56,9 @@ impl ObjectStore for R2Store {
         Ok(Some(BlobMeta {
             key: obj.key(),
             size: obj.size(),
-            // R2 does not expose a sha256; content addressing is not used
-            // downstream (sizes + keys drive all reads).
-            sha256: String::new(),
+            // R2's native http_etag changes on every rewrite: a perfect
+            // opaque validator (served as the asset ETag).
+            sha256: obj.http_etag(),
             content_type: None,
             modified: None,
         }))

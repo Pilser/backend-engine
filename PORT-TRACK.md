@@ -231,6 +231,21 @@ curl -H "$K" -X POST $BASE/api/secrets -d '{"name":"OAUTH_CLIENT_ID","value":"<i
 - [x] fixed adjacent leak: MCP `keys.show` exposed `key_hash`/`salt`
 - [x] tests updated; native + `--tests` + wasm green, graphs clean
 
+## Edge cache + validators (2026-09-27) — /srv/* cost program
+
+- Phase 1: blob hash → ETag on every asset (memory sha256, R2 http_etag
+  now plumbed through head); `304` on `If-None-Match` (incl. `*`, lists,
+  `W/`); also on `/api/assets/*`. No validator on pre-existing assets
+  until re-uploaded.
+- Phase 2: `Cache::default` match/put/delete. Public tenants only
+  (shared entries must never mix principals); HTML `s-maxage=60`,
+  static `s-maxage=86400` (overridable via `ASSETS_S_MAXAGE_HTML` /
+  `ASSETS_S_MAXAGE` vars); browser directives unchanged. Exact-URL
+  invalidation on asset put/delete. Cache ops are best-effort (never
+  fail a serve); MCP-imported assets rely on s-maxage expiry.
+- Why: every /srv/ hit is worker CPU + storage I/O billed per request;
+  frontend files are the hottest paths in the system.
+
 ## Migration question (2026-09-27) — user-tested 0.3.1→0.3.2 upgrade
 
 - Verdict: NO automated migration — not worthy. Zero production data

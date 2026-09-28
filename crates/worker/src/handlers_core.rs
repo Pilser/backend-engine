@@ -411,7 +411,10 @@ pub async fn asset_put(mut req: Request, ctx: RouteContext<()>) -> Result<Respon
         return Ok(cors::err(400, "empty asset"));
     }
     Ok(match app.engine.put_asset(&rel, &bytes).await {
-        Ok(()) => cors::ok(json!({ "ok": true, "asset": rel })),
+        Ok(()) => {
+            invalidate_asset(&req, &rel).await;
+            cors::ok(json!({ "ok": true, "asset": rel }))
+        }
         Err(e) => cors::bad(&e),
     })
 }
@@ -432,11 +435,36 @@ pub async fn asset_get(req: Request, ctx: RouteContext<()>) -> Result<Response> 
     if !tenant.public_reads && !auth::require_read(&app.principal) {
         return Ok(cors::deny("private app"));
     }
+    let etag = app
+        .engine
+        .head_asset(&rel)
+        .await
+        .unwrap_or(None)
+        .map(|m| m.sha256)
+        .unwrap_or_default();
+    if cors::etag_matches(&req, &etag) {
+        return Ok(cors::not_modified(&etag));
+    }
     Ok(match app.engine.get_asset(&rel).await {
-        Ok(Some((data, ct))) => cors::bytes(data, &ct, "public, max-age=3600"),
+        Ok(Some((data, ct))) => cors::asset_bytes(data, &ct, "public, max-age=3600", &etag),
         Ok(None) => cors::gone("not found"),
         Err(e) => cors::bad(&e),
     })
+}
+
+/// Drop a stored asset's edge-cache entries (both serving URLs) after a
+/// write or delete, so the next GET fetches fresh bytes immediately.
+/// Best-effort: cache errors are swallowed by the caller paths.
+async fn invalidate_asset(req: &Request, rel: &str) {
+    let Ok(url) = req.url() else {
+        return;
+    };
+    let base = url.origin().ascii_serialization();
+    let base = base.trim_end_matches('/');
+    let cache = worker::Cache::default();
+    for path in [format!("{base}/srv/{rel}"), format!("{base}/api/assets/{rel}")] {
+        let _ = cache.delete(path.as_str(), false).await;
+    }
 }
 
 pub async fn asset_list(req: Request, ctx: RouteContext<()>) -> Result<Response> {
@@ -474,7 +502,10 @@ pub async fn asset_delete(req: Request, ctx: RouteContext<()>) -> Result<Respons
         return Ok(cors::deny("writer authorization required"));
     }
     Ok(match app.engine.delete_asset(&rel).await {
-        Ok(true) => cors::ok(json!({ "ok": true, "asset": rel })),
+        Ok(true) => {
+            invalidate_asset(&req, &rel).await;
+            cors::ok(json!({ "ok": true, "asset": rel }))
+        }
         Ok(false) => cors::gone("not found"),
         Err(e) => cors::bad(&e),
     })

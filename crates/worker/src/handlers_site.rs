@@ -2,6 +2,11 @@
 //! sub-app slug routing, `index.html` fallbacks, `<base>` injection so
 //! relative asset URLs survive deep-link refreshes, and long caching for
 //! hashed assets. No `{board}` — one worker serves one app.
+//!
+//! Cost control (every hit here is worker CPU + storage I/O):
+//! - Validators: blob hash → ETag, `304` on `If-None-Match` (no bytes).
+//! - Edge cache (`Cache::default`): public tenants only — shared entries
+//!   must never mix principals. Invalidated on asset put/delete.
 
 use worker::{Request, Response, Result, RouteContext};
 
@@ -69,29 +74,80 @@ pub async fn serve(req: Request, ctx: RouteContext<()>) -> Result<Response> {
         target = fallback.clone();
     }
 
-    let mut fetched = match app.engine.get_asset(&target).await {
-        Ok(v) => v,
-        Err(_) => None,
-    };
-    if fetched.is_none() && !target.ends_with(".html") {
-        fetched = app
-            .engine
-            .get_asset(&format!("{target}/index.html"))
-            .await
-            .unwrap_or(None);
+    // Candidate paths in historical order (pure — no I/O yet).
+    let mut candidates = vec![target.clone()];
+    if !target.ends_with(".html") {
+        candidates.push(format!("{target}/index.html"));
     }
     // SPA fallback: extensionless unknown paths serve the index.
-    if fetched.is_none() && !has_file_ext(&target) {
-        fetched = app.engine.get_asset(&fallback).await.unwrap_or(None);
+    if !has_file_ext(&target) {
+        candidates.push(fallback.clone());
     }
-    let Some((data, content_type)) = fetched else {
+    let public = tenant.public_reads;
+    let url = req.url().map(|u| u.to_string()).unwrap_or_default();
+
+    // Phase 2: edge cache first (public tenants only). Cache ops are
+    // best-effort — a cache error must never fail the serve.
+    if public && !url.is_empty() {
+        if let Ok(hit) = worker::Cache::default().get(url.as_str(), false).await {
+            if let Some(res) = hit {
+                if let Ok(etag) = res.headers().get("etag") {
+                    if let Some(e) = etag {
+                        if cors::etag_matches(&req, e.trim_matches('"')) {
+                            return Ok(cors::not_modified(e.trim_matches('"')));
+                        }
+                    }
+                }
+                return Ok(res);
+            }
+        }
+    }
+
+    // Phase 1: metadata first (cheap head) — a validator match answers
+    // 304 without ever reading the bytes.
+    let mut found: Option<(String, engine::storage::object_store::BlobMeta)> = None;
+    for cand in &candidates {
+        if let Ok(Some(m)) = app.engine.head_asset(cand).await {
+            found = Some((cand.clone(), m));
+            break;
+        }
+    }
+    let Some((path, meta)) = found else {
         return Ok(cors::gone("not found"));
     };
-    let (body, cache) = if content_type.starts_with("text/html") {
+    if cors::etag_matches(&req, &meta.sha256) {
+        return Ok(cors::not_modified(&meta.sha256));
+    }
+    let Some((data, content_type)) = app.engine.get_asset(&path).await.unwrap_or(None) else {
+        return Ok(cors::gone("not found"));
+    };
+    let is_html = content_type.starts_with("text/html");
+    let (body, cache) = if is_html {
         let tag = format!("<base href=\"{base}\">");
         (inject_base_tag(&data, &tag).into_bytes(), "no-cache")
     } else {
         (data, "public, max-age=3600")
     };
-    Ok(cors::bytes(body, &content_type, cache))
+    // Shared-cache lifetime rides alongside (never instead of) the browser
+    // directive; HTML revalidates fast so deploys surface, hashed assets
+    // linger (exact-URL invalidation on put keeps them correct).
+    let s_maxage = |default: u64, var: &str| {
+        ctx.env
+            .var(var)
+            .ok()
+            .and_then(|v| v.to_string().parse::<u64>().ok())
+            .unwrap_or(default)
+    };
+    if !public {
+        return Ok(cors::asset_bytes(body, &content_type, cache, &meta.sha256));
+    }
+    let smax = if is_html {
+        s_maxage(60, "ASSETS_S_MAXAGE_HTML")
+    } else {
+        s_maxage(86400, "ASSETS_S_MAXAGE")
+    };
+    let cache = format!("{cache}, s-maxage={smax}");
+    let cached = cors::asset_bytes(body.clone(), &content_type, &cache, &meta.sha256);
+    let _ = worker::Cache::default().put(url.as_str(), cached).await;
+    Ok(cors::asset_bytes(body, &content_type, &cache, &meta.sha256))
 }

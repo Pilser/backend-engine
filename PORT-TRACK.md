@@ -245,6 +245,11 @@ curl -H "$K" -X POST $BASE/api/secrets -d '{"name":"OAUTH_CLIENT_ID","value":"<i
   fail a serve); MCP-imported assets rely on s-maxage expiry.
 - Why: every /srv/ hit is worker CPU + storage I/O billed per request;
   frontend files are the hottest paths in the system.
+- Live findings: R2 http_etags arrive pre-quoted (normalize before
+  emitting, else `"\"...\""`); `no-cache` vetoes edge storage so HTML uses
+  `max-age=0` + `s-maxage` (browsers still revalidate every load, edge may
+  serve 60s, put purges regardless). Cache HIT proven by storage bypass:
+  nuked R2 object still serves byte-identical 200s.
 
 ## Migration question (2026-09-27) — user-tested 0.3.1→0.3.2 upgrade
 

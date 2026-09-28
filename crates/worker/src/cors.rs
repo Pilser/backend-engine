@@ -77,6 +77,8 @@ pub fn asset_bytes(data: Vec<u8>, content_type: &str, cache: &str, etag: &str) -
     let h = cors_headers();
     let _ = h.set("content-type", content_type);
     let _ = h.set("cache-control", cache);
+    // R2 http_etags arrive pre-quoted; memory shas are bare — normalize.
+    let etag = etag.trim_matches('"');
     if !etag.is_empty() {
         let _ = h.set("etag", &format!("\"{etag}\""));
     }
@@ -88,6 +90,7 @@ pub fn asset_bytes(data: Vec<u8>, content_type: &str, cache: &str, etag: &str) -
 /// 304 for a validator match — carries no bytes (safe on private apps too).
 pub fn not_modified(etag: &str) -> Response {
     let h = cors_headers();
+    let etag = etag.trim_matches('"');
     if !etag.is_empty() {
         let _ = h.set("etag", &format!("\"{etag}\""));
     }
@@ -97,6 +100,7 @@ pub fn not_modified(etag: &str) -> Response {
 /// True when the request's If-None-Match allows a 304 for this validator.
 /// Handles `*`, single and list forms, weak (`W/`) prefixes, quoting.
 pub fn etag_matches(req: &worker::Request, etag: &str) -> bool {
+    let etag = etag.trim_matches('"');
     if etag.is_empty() {
         return false;
     }

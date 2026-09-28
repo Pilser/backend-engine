@@ -122,9 +122,12 @@ pub async fn serve(req: Request, ctx: RouteContext<()>) -> Result<Response> {
         return Ok(cors::gone("not found"));
     };
     let is_html = content_type.starts_with("text/html");
+    // NOTE: `no-cache` vetoes edge storage, so HTML uses `max-age=0` —
+    // browsers still revalidate every load (deploy-fresh), while the shared
+    // cache may serve `s-maxage` seconds (purged on put regardless).
     let (body, cache) = if is_html {
         let tag = format!("<base href=\"{base}\">");
-        (inject_base_tag(&data, &tag).into_bytes(), "no-cache")
+        (inject_base_tag(&data, &tag).into_bytes(), "public, max-age=0")
     } else {
         (data, "public, max-age=3600")
     };

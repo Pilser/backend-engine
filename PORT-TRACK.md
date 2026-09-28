@@ -231,6 +231,18 @@ curl -H "$K" -X POST $BASE/api/secrets -d '{"name":"OAUTH_CLIENT_ID","value":"<i
 - [x] fixed adjacent leak: MCP `keys.show` exposed `key_hash`/`salt`
 - [x] tests updated; native + `--tests` + wasm green, graphs clean
 
+## Site routes + request proxy (2026-09-28) — zero-shim single tenant
+
+- `site_routes` (redirect/text/asset/query incl. sitemap format) +
+  `request_routes` (declarative proxy: templated target, header injection,
+  SSRF gate, 5 MiB cap, no upstream auth forwarding, never edge-cached).
+- Exact-first/longest-prefix matching; reserved prefixes rejected; same
+  path twice is a conflict. Query routes run as anonymous (private data
+  fails loudly). `/` consults site routes, else SPA redirect default.
+- MCP `site` group + `/api/site/routes` REST + PLUGINS.md standard.
+- Pilserlabs mapping: sitemap/robots// from engine data, plugin SEO
+  diffused via query routes, `/docs/*`-style proxy without wrapper code.
+
 ## Custom domain cleared (2026-09-28) — routing fixed, all engine
 
 - After their routing fix: `/`, `/mcp`, `/srv/*`, `/api/*` on

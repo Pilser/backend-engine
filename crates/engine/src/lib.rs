@@ -21,6 +21,7 @@ pub mod realtime;
 pub mod registry;
 pub mod schema;
 pub mod secrets;
+pub mod site;
 pub mod storage;
 pub mod tables;
 pub mod webhooks;

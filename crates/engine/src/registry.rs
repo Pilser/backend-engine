@@ -2269,5 +2269,74 @@ pub fn registry() -> Vec<CommandSpec> {
         danger_notes: Some("with --prune the plugin tables and their data are dropped".into()),
     });
 
+    specs.push(CommandSpec {
+        group: "site".into(),
+        verb: "routes".into(),
+        summary: "List exact-path site + request routes.".into(),
+        description: "Returns configured routes (redirect/text/asset/query/proxy) with owners. Standard: docs/PLUGINS.md.".into(),
+        positional: vec![],
+        flags: vec![],
+        body_json: None,
+        response: serde_json::json!({ "ok": true, "routes": [] }),
+        auth: Role::Reader,
+        destructive: false,
+        dry_run: false,
+        examples: vec![],
+        see_also: vec!["site.add".into(), "site.remove".into()],
+        danger_notes: None,
+    });
+
+    specs.push(CommandSpec {
+        group: "site".into(),
+        verb: "add".into(),
+        summary: "Add an exact-path site or request route.".into(),
+        description: "Upserts one route (trailing JSON): {path, kind: redirect|text|asset|query|proxy, ...}. Reserved prefixes (/api/*, /mcp, /srv/*, /ws, /healthz) rejected; same path twice is a conflict. Owner defaults to tenant (--owner plugin:<slug> for plugins).".into(),
+        positional: vec![],
+        flags: vec![FlagSpec {
+            name: "owner".into(),
+            r#type: FlagType::Str,
+            default: None,
+            allowed: vec![],
+            repeatable: false,
+            help: "Route owner (default tenant).".into(),
+            conflicts: vec![],
+            requires: vec![],
+        }],
+        body_json: None,
+        response: serde_json::json!({ "ok": true, "path": "/robots.txt" }),
+        auth: Role::Admin,
+        destructive: false,
+        dry_run: false,
+        examples: vec![Example {
+            args: "site add '{\"path\":\"/robots.txt\",\"kind\":\"text\",\"body\":\"User-agent: *\\nAllow: /\\n\"}'".into(),
+            description: "Serve robots.txt.".into(),
+            response: serde_json::json!({ "ok": true, "path": "/robots.txt" }),
+        }],
+        see_also: vec!["site.routes".into(), "site.remove".into(), "plugins.install".into()],
+        danger_notes: None,
+    });
+
+    specs.push(CommandSpec {
+        group: "site".into(),
+        verb: "remove".into(),
+        summary: "Remove an exact-path route.".into(),
+        description: "Deletes the route by path (any owner).".into(),
+        positional: vec![ArgSpec {
+            name: "path".into(),
+            r#type: ArgType::Str,
+            required: true,
+            help: "Route path.".into(),
+        }],
+        flags: vec![],
+        body_json: None,
+        response: serde_json::json!({ "ok": true, "removed": true }),
+        auth: Role::Admin,
+        destructive: true,
+        dry_run: true,
+        examples: vec![],
+        see_also: vec!["site.routes".into()],
+        danger_notes: None,
+    });
+
     specs
 }

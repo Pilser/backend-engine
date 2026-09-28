@@ -9,6 +9,7 @@ pub mod keys;
 pub mod links;
 pub mod plugins;
 pub mod recipes;
+pub mod site;
 pub mod records;
 pub mod secrets;
 pub mod subapps;
@@ -91,6 +92,9 @@ pub async fn run(
         "plugins.list" => plugins::list(engine, principal, arguments).await,
         "plugins.show" => plugins::show(engine, principal, arguments).await,
         "plugins.remove" => plugins::remove(engine, principal, arguments).await,
+        "site.routes" => site::routes(engine, principal, arguments).await,
+        "site.add" => site::add(engine, principal, arguments).await,
+        "site.remove" => site::remove(engine, principal, arguments).await,
         other => Err(format!("tool '{other}' not implemented yet")),
     }
 }

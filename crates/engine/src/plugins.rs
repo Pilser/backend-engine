@@ -168,6 +168,18 @@ pub async fn install(engine: &mut crate::ServerlessEngine, manifest: &Json) -> a
     let title = m.get("title").and_then(|v| v.as_str()).unwrap_or(slug);
     let version = m.get("version").and_then(|v| v.as_str()).unwrap_or("0.1.0");
 
+    // Site + request routes (Phase C/D): validate EVERYTHING before
+    // mutating anything, so a bad route fails the install cleanly.
+    let mut site_routes = Vec::new();
+    for key in ["site_routes", "request_routes"] {
+        for r in m.get(key).and_then(|v| v.as_array()).cloned().unwrap_or_default() {
+            let p = r.get("path").and_then(|v| v.as_str()).unwrap_or("");
+            crate::site::valid_path(p).map_err(|e| anyhow::anyhow!("{key}: {e}"))?;
+            crate::site::valid_spec(&r).map_err(|e| anyhow::anyhow!("{key} {p}: {e}"))?;
+            site_routes.push(r);
+        }
+    }
+
     // Tables (namespaced, enforced).
     let mut tables = Vec::new();
     for t in m.get("tables").and_then(|v| v.as_array()).cloned().unwrap_or_default() {
@@ -238,6 +250,15 @@ pub async fn install(engine: &mut crate::ServerlessEngine, manifest: &Json) -> a
     }
     replace_records(engine, TABLE_ROUTES, |p| p.get("slug").and_then(|v| v.as_str()) != Some(slug), routes).await?;
 
+    // Site + request routes (owner plugin:<slug>; conflicts fail loudly).
+    let owner = format!("plugin:{slug}");
+    let mut site_paths = Vec::new();
+    for r in &site_routes {
+        let p = r.get("path").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        crate::site::route_put(engine, &owner, r).await?;
+        site_paths.push(p);
+    }
+
     // Sub-app registration (dist bytes arrive separately via files put --slug).
     if let Some(sub) = m.get("subapp").and_then(|v| v.as_object()) {
         let title = sub.get("title").and_then(|v| v.as_str());
@@ -256,6 +277,7 @@ pub async fn install(engine: &mut crate::ServerlessEngine, manifest: &Json) -> a
     let record = json!({
         "slug": slug, "title": title, "version": version,
         "tables": tables, "recipes": recipes, "jobs": jobs,
+        "site_routes": site_paths,
         "email_inbound": email_inbound,
         "installed_at": crate::crud::now_str(),
     });
@@ -264,6 +286,7 @@ pub async fn install(engine: &mut crate::ServerlessEngine, manifest: &Json) -> a
     Ok(json!({
         "ok": true, "slug": slug,
         "tables": tables, "recipes": recipes, "jobs": jobs,
+        "site_routes": site_paths,
     }))
 }
 
@@ -298,6 +321,17 @@ pub async fn remove(engine: &mut crate::ServerlessEngine, slug: &str, prune: boo
         }
     }
     replace_records(engine, TABLE_ROUTES, |r| r.get("slug").and_then(|v| v.as_str()) != Some(slug), vec![]).await?;
+    // Owned site routes are config, not data: always removed.
+    if let Ok(rows) = crate::site::route_list(engine).await {
+        let owner = format!("plugin:{slug}");
+        for row in rows {
+            let owned = row.get("owner").and_then(|v| v.as_str()) == Some(owner.as_str());
+            let path = row.get("path").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            if owned && !path.is_empty() {
+                let _ = crate::site::route_remove(engine, &path).await;
+            }
+        }
+    }
     engine.remove_subapp(slug).await.unwrap_or(false);
     engine.delete_record(TABLE_PLUGINS, rec.seq).await?;
     Ok(json!({ "ok": true, "slug": slug, "prune": prune, "tables_dropped": dropped }))

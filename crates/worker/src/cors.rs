@@ -125,7 +125,17 @@ pub fn etag_matches(req: &worker::Request, etag: &str) -> bool {
 }
 
 pub fn redirect_to(location: &str) -> Response {
+    redirect_to_status(location, 308)
+}
+
+/// Redirect with a configured status (site routes). Unknown codes fall
+/// back to 302; only 301/302/303/307/308 are honored.
+pub fn redirect_to_status(location: &str, status: u16) -> Response {
+    let status = match status {
+        301 | 302 | 303 | 307 | 308 => status,
+        _ => 302,
+    };
     let h = cors_headers();
     let _ = h.set("location", location);
-    Response::empty().unwrap().with_headers(h).with_status(308)
+    Response::empty().unwrap().with_headers(h).with_status(status)
 }

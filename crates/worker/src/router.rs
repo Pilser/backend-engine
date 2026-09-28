@@ -79,6 +79,10 @@ pub async fn run(req: Request, env: Env) -> Result<Response> {
         .post_async("/api/jobs", admin::add_job)
         .delete_async("/api/jobs", admin::remove_job)
         .get_async("/api/jobs/runs", admin::job_runs)
+        // site + request routes (exact paths, declarative proxy)
+        .get_async("/api/site/routes", site::site_routes)
+        .post_async("/api/site/routes", site::site_add)
+        .delete_async("/api/site/routes", site::site_remove)
         // plugins (Phase B: native manifests; Phase C: route bindings)
         .post_async("/api/plugins", plugins::install)
         .get_async("/api/plugins", plugins::list)
@@ -133,21 +137,19 @@ pub async fn run(req: Request, env: Env) -> Result<Response> {
         .get_async("/api/system/health", core::system_health)
         .post_async("/mcp", core::mcp)
         .get_async("/mcp", core::mcp_get)
-        // Root opens the hosted app, not a 404: one Worker = one app, and the
-        // app lives at /srv/. (No SPA uploaded yet → /srv/ 404s honestly.)
-        .get_async("/", |req, _ctx| async move {
-            let _ = req;
-            Ok(crate::cors::redirect_to("/srv/"))
-        })
+        // Root opens the hosted app, not a 404: a configured site route for
+        // "/" wins (manifest-driven entry), else the SPA default. (No SPA
+        // uploaded yet → /srv/ 404s honestly.)
+        .get_async("/", site::root)
         .get_async("/srv", site::srv_root)
         // Bare "/srv/" (empty path): serve() defaults an empty target to the
         // index.html SPA fallback — without this, /*path needs ≥1 segment and
         // the canonical URL falls through to the 404 catchall.
         .get_async("/srv/", site::serve)
         .get_async("/srv/*path", site::serve)
-        .or_else_any_method_async("/*catchall", |req, _ctx| async move {
-            Ok(cors::err(404, &format!("not found: {}", req.path())))
-        })
+        // Site + request routes (exact paths, /* prefixes, every method):
+        // configured paths serve here, everything else keeps the 404.
+        .or_else_any_method_async("/*catchall", site::custom)
         .run(req, env)
         .await
 }

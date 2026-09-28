@@ -13,10 +13,399 @@ use worker::{Request, Response, Result, RouteContext};
 use crate::{auth, cors};
 
 pub async fn srv_root(req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let _ = (&req, &ctx);
+    // A configured site route for "/" wins (manifest-driven entry point);
+    // otherwise the historical default: the hosted SPA.
+    if let Ok(app) = auth::ctx_for(&req, &ctx).await {
+        if let Ok(Some(row)) = engine::site::route_match(&app.engine, "GET", "/").await {
+            return dispatch_site(req, ctx, row).await;
+        }
+    }
     // Trailing-slash canonical form so relative "./…" URLs in index.html
     // resolve against /srv/ instead of /.
     Ok(cors::redirect_to("/srv/"))
+}
+
+/// Root entry (replaces the hardcoded redirect): site route or SPA default.
+pub async fn root(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    srv_root(req, ctx).await
+}
+
+const MAX_PROXY_BODY: usize = 5 * 1024 * 1024;
+
+fn apply_headers(h: &worker::Headers, map: &serde_json::Value) {
+    if let Some(obj) = map.as_object() {
+        for (k, v) in obj {
+            if let Some(s) = v.as_str() {
+                let _ = h.set(k, s);
+            }
+        }
+    }
+}
+
+/// Catchall site dispatcher (registered before the 404 fallback): exact
+/// paths, `/*` prefixes, every method. Unmatched → the historical 404.
+pub async fn custom(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let method = req.method().to_string();
+    let path = req.path();
+    let app = match auth::ctx_for(&req, &ctx).await {
+        Ok(c) => c,
+        Err(r) => return Ok(r),
+    };
+    let row = match engine::site::route_match(&app.engine, &method, &path).await {
+        Ok(r) => r,
+        Err(e) => return Ok(cors::bad(&e)),
+    };
+    let Some(row) = row else {
+        return Ok(cors::err(404, &format!("not found: {path}")));
+    };
+    dispatch_site(req, ctx, row).await
+}
+
+async fn dispatch_site(req: Request, ctx: RouteContext<()>, row: serde_json::Value) -> Result<Response> {
+    let method = req.method().to_string();
+    let spec = row.get("spec").cloned().unwrap_or(serde_json::Value::Null);
+    let kind = spec.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+    let route_path = row.get("path").and_then(|v| v.as_str()).unwrap_or("");
+    if kind != "proxy" {
+        let want = spec.get("method").and_then(|v| v.as_str()).unwrap_or("GET");
+        if want != "*" && method != want {
+            return Ok(cors::err(405, &format!("route allows {want}")));
+        }
+    }
+    // Site routes are PUBLIC surface by design (SEO, exact paths). Auth is
+    // intentionally not consulted; data routes additionally enforce
+    // anonymous readability below.
+    let mut app = match auth::ctx_for(&req, &ctx).await {
+        Ok(c) => c,
+        Err(r) => return Ok(r),
+    };
+    match kind {
+        "redirect" => {
+            let to = spec.get("to").and_then(|v| v.as_str()).unwrap_or("/srv/");
+            let status = spec.get("status").and_then(|v| v.as_u64()).unwrap_or(302) as u16;
+            let to = engine::site::render_target(to, engine::TENANT, "", "");
+            Ok(cors::redirect_to_status(&to, status))
+        }
+        "text" => {
+            let body = spec.get("body").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let ct = spec.get("content_type").and_then(|v| v.as_str()).unwrap_or("text/plain").to_string();
+            let bytes = body.into_bytes();
+            let etag = sha256_hex(&bytes);
+            if cors::etag_matches(&req, &etag) {
+                return Ok(cors::not_modified(&etag));
+            }
+            let smax = spec.get("s_maxage").and_then(|v| v.as_u64()).unwrap_or(3600);
+            let cache = format!("public, max-age=3600, s-maxage={smax}");
+            let mut res = cors::asset_bytes(bytes.clone(), &ct, &cache, &etag);
+            apply_headers(res.headers_mut(), spec.get("headers").unwrap_or(&serde_json::Value::Null));
+            if let Ok(url) = req.url().map(|u| u.to_string()) {
+                let cached = cors::asset_bytes(bytes, &ct, &cache, &etag);
+                let _ = worker::Cache::default().put(url.as_str(), cached).await;
+            }
+            Ok(res)
+        }
+        "asset" => {
+            let rel = spec.get("path").and_then(|v| v.as_str()).unwrap_or("");
+            let Some((data, ct)) = app.engine.get_asset(rel).await.unwrap_or(None) else {
+                return Ok(cors::gone("not found"));
+            };
+            let smax = spec.get("s_maxage").and_then(|v| v.as_u64()).unwrap_or_else(|| {
+                if ct.starts_with("text/html") { 60 } else { 86400 }
+            });
+            let cache = if ct.starts_with("text/html") {
+                format!("public, max-age=0, s-maxage={smax}")
+            } else {
+                format!("public, max-age=3600, s-maxage={smax}")
+            };
+            respond_bytes(&req, data, &ct, &cache, &spec).await
+        }
+        "query" => {
+            let table = spec.get("table").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            // Public surface: only anonymously-readable data is servable.
+            // Fail loudly (not silently empty) so misconfigurations show.
+            let tenant_public = app.engine.tenant().await.map(|t| t.public_reads).unwrap_or(false);
+            let open = app
+                .engine
+                .get_table(&table)
+                .await
+                .ok()
+                .flatten()
+                .map(|c| c.anon_read_open(tenant_public))
+                .unwrap_or(false);
+            if !open {
+                return Ok(cors::deny("route table not public"));
+            }
+            let limit = spec.get("limit").and_then(|v| v.as_u64()).unwrap_or(100).clamp(1, 5000) as usize;
+            let filter_json = spec.get("filter").cloned().unwrap_or(serde_json::Value::Null);
+            let conds = if filter_json.is_null() {
+                Vec::new()
+            } else {
+                match engine::storage::ir::parse_filter(&filter_json) {
+                    Ok(f) => f.conds,
+                    Err(e) => return Ok(cors::bad(&e)),
+                }
+            };
+            // Paginate to completeness (engine clamps 500/call).
+            let mut payloads = Vec::new();
+            let mut offset = 0usize;
+            loop {
+                let chunk = limit.min(500).min(limit.saturating_sub(payloads.len()));
+                if chunk == 0 {
+                    break;
+                }
+                let sf = engine::storage::ir::SrvFilter { conds: conds.clone() };
+                let batch = match app.engine.query_records(&table, &sf, &[], chunk, offset).await {
+                    Ok(b) => b,
+                    Err(e) => return Ok(cors::bad(&e)),
+                };
+                let n = batch.len();
+                payloads.extend(batch.into_iter().map(|r| r.payload));
+                if n < chunk || payloads.len() >= limit {
+                    break;
+                }
+                offset += n;
+            }
+            let format = spec.get("format").and_then(|v| v.as_str()).unwrap_or("json");
+            let (body, ct) = if format == "sitemap" {
+                let origin = req.url().map(|u| u.origin().ascii_serialization()).unwrap_or_default();
+                let base = origin.trim_end_matches('/').to_string();
+                let prefix = spec.get("prefix").and_then(|v| v.as_str()).unwrap_or("/p/");
+                let field = spec.get("url_field").and_then(|v| v.as_str()).unwrap_or("slug");
+                let xml = engine::site::render_sitemap(&base, prefix, field, &payloads);
+                (xml.into_bytes(), "application/xml".to_string())
+            } else {
+                let body = serde_json::json!({ "ok": true, "records": payloads });
+                (serde_json::to_vec(&body).unwrap_or_default(), "application/json".to_string())
+            };
+            let smax = spec.get("s_maxage").and_then(|v| v.as_u64()).unwrap_or(60);
+            let cache = format!("public, max-age=0, s-maxage={smax}");
+            respond_bytes(&req, body, &ct, &cache, &spec).await
+        }
+        "proxy" => proxy_route(req, &mut app, &spec, route_path, &method).await,
+        _ => Ok(cors::err(500, "unsupported site route kind")),
+    }
+}
+
+/// Request-time proxy (Phase D): declarative `op: proxy` route bindings.
+/// Forwards method + allowlisted headers + body, returns upstream status +
+/// bytes. Never forwards `authorization`/`cookie` (upstream auth comes only
+/// from admin-configured `inject_headers`); SSRF-gated like `$call`.
+async fn proxy_route(
+    mut req: Request,
+    _app: &mut crate::auth::Ctx,
+    spec: &serde_json::Value,
+    route_path: &str,
+    method: &str,
+) -> Result<Response> {
+    let allowed: Vec<String> = spec
+        .get("methods")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+        .unwrap_or_else(|| vec!["GET".to_string()]);
+    if !allowed.iter().any(|m| m == method) {
+        return Ok(cors::err(405, &format!("route allows {}", allowed.join(","))));
+    }
+    let rest = if let Some(pre) = route_path.strip_suffix("/*") {
+        req.path().strip_prefix(pre).unwrap_or("").trim_start_matches('/').to_string()
+    } else {
+        String::new()
+    };
+    let query = req.url().ok().and_then(|u| u.query().map(str::to_string)).unwrap_or_default();
+    let tmpl = spec.get("target").and_then(|v| v.as_str()).unwrap_or("");
+    let mut target = engine::site::render_target(tmpl, engine::TENANT, &rest, &query);
+    let forward = spec.get("forward_query").and_then(|v| v.as_bool()).unwrap_or(true);
+    if forward && !query.is_empty() && !tmpl.contains("{{$.query}}") {
+        target.push(if target.contains('?') { '&' } else { '?' });
+        target.push_str(&query);
+    }
+    if !engine::webhooks::valid_url(&target) {
+        return Ok(cors::err(502, "ssrf-blocked proxy target"));
+    }
+    let hs = worker::Headers::new();
+    for name in req.headers().keys() {
+        let n = name.to_ascii_lowercase();
+        if matches!(
+            n.as_str(),
+            "host" | "connection"
+                | "upgrade"
+                | "content-length"
+                | "transfer-encoding"
+                | "accept-encoding"
+                | "cookie"
+                | "authorization"
+        ) {
+            continue;
+        }
+        if let Ok(Some(v)) = req.headers().get(&name) {
+            let _ = hs.set(&name, &v);
+        }
+    }
+    if let Some(obj) = spec.get("inject_headers").and_then(|v| v.as_object()) {
+        for (k, v) in obj {
+            if let Some(s) = v.as_str() {
+                let rendered = engine::site::render_target(s, engine::TENANT, &rest, &query);
+                let _ = hs.set(k, &rendered);
+            }
+        }
+    }
+    let body_bytes = if matches!(method, "POST" | "PUT" | "PATCH" | "DELETE") {
+        match req.bytes().await {
+            Ok(b) if b.len() <= MAX_PROXY_BODY => b,
+            Ok(_) => return Ok(cors::err(413, "proxy body too large (5 MiB max)")),
+            Err(_) => return Ok(cors::err(400, "unreadable proxy body")),
+        }
+    } else {
+        Vec::new()
+    };
+    let js_body = if body_bytes.is_empty() {
+        None
+    } else {
+        Some(worker::js_sys::Uint8Array::from(body_bytes.as_slice()).into())
+    };
+    let wmethod = match method {
+        "POST" => worker::Method::Post,
+        "PUT" => worker::Method::Put,
+        "PATCH" => worker::Method::Patch,
+        "DELETE" => worker::Method::Delete,
+        "HEAD" => worker::Method::Head,
+        "OPTIONS" => worker::Method::Options,
+        _ => worker::Method::Get,
+    };
+    let mut init = worker::RequestInit::new();
+    init.with_method(wmethod).with_headers(hs).with_body(js_body);
+    let out_req = match worker::Request::new_with_init(&target, &init) {
+        Ok(r) => r,
+        Err(_) => return Ok(cors::err(502, "bad proxy target")),
+    };
+    let upstream = match worker::Fetch::Request(out_req).send().await {
+        Ok(r) => r,
+        Err(e) => return Ok(cors::err(502, &format!("upstream unreachable: {e}"))),
+    };
+    let status = upstream.status_code();
+    let content_type = upstream
+        .headers()
+        .get("content-type")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "application/octet-stream".to_string());
+    let encoding = upstream
+        .headers()
+        .get("content-encoding")
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let mut upstream = upstream;
+    let data = match upstream.bytes().await {
+        Ok(b) if b.len() <= MAX_PROXY_BODY => b,
+        Ok(_) => return Ok(cors::err(502, "upstream body too large (5 MiB max)")),
+        Err(e) => return Ok(cors::err(502, &format!("upstream read failed: {e}"))),
+    };
+    let h = worker::Headers::new();
+    let _ = h.set("access-control-allow-origin", "*");
+    let _ = h.set("content-type", &content_type);
+    if !encoding.is_empty() {
+        let _ = h.set("content-encoding", &encoding);
+    }
+    worker::Response::from_bytes(data)
+        .map(|r| r.with_headers(h).with_status(status))
+        .or_else(|_| Ok(cors::err(502, "response encode failed")))
+}
+
+/// Shared responder: ETag over final bytes, 304s, edge put (public).
+async fn respond_bytes(
+    req: &Request,
+    data: Vec<u8>,
+    ct: &str,
+    cache: &str,
+    spec: &serde_json::Value,
+) -> Result<Response> {
+    let etag = sha256_hex(&data);
+    if cors::etag_matches(req, &etag) {
+        return Ok(cors::not_modified(&etag));
+    }
+    let mut res = cors::asset_bytes(data.clone(), ct, cache, &etag);
+    apply_headers(res.headers_mut(), spec.get("headers").unwrap_or(&serde_json::Value::Null));
+    if let Ok(url) = req.url().map(|u| u.to_string()) {
+        let cached = cors::asset_bytes(data, ct, cache, &etag);
+        let _ = worker::Cache::default().put(url.as_str(), cached).await;
+    }
+    Ok(res)
+}
+
+/// REST: list site routes (reader) — the exact-path surface.
+pub async fn site_routes(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let app = match auth::ctx_for(&req, &ctx).await {
+        Ok(c) => c,
+        Err(r) => return Ok(r),
+    };
+    if !auth::require_read(&app.principal) {
+        return Ok(cors::deny("reader authorization required"));
+    }
+    Ok(match engine::site::route_list(&app.engine).await {
+        Ok(routes) => cors::ok(serde_json::json!({ "ok": true, "routes": routes })),
+        Err(e) => cors::bad(&e),
+    })
+}
+
+/// REST: add a site route (admin). Body is the route JSON; `owner`
+/// defaults to tenant.
+pub async fn site_add(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let mut app = match auth::ctx_for(&req, &ctx).await {
+        Ok(c) => c,
+        Err(r) => return Ok(r),
+    };
+    if !auth::require_admin(&app.principal) {
+        return Ok(cors::deny("admin authorization required"));
+    }
+    let bytes = match req.bytes().await {
+        Ok(b) if b.len() <= 1_000_000 => b,
+        _ => return Ok(cors::err(400, "unreadable/too-large body")),
+    };
+    let route: serde_json::Value = match serde_json::from_slice(&bytes) {
+        Ok(v) => v,
+        Err(_) => return Ok(cors::err(400, "invalid json")),
+    };
+    let owner = route.get("owner").and_then(|v| v.as_str()).unwrap_or("tenant").to_string();
+    Ok(match engine::site::route_put(&mut app.engine, &owner, &route).await {
+        Ok(()) => {
+            if let (Some(path), Ok(url)) = (
+                route.get("path").and_then(|v| v.as_str()),
+                req.url().map(|u| u.origin().ascii_serialization()),
+            ) {
+                let full = format!("{}{}", base_trim(&url), path);
+                let _ = worker::Cache::default().delete(full.as_str(), false).await;
+            }
+            cors::created(serde_json::json!({ "ok": true, "path": route.get("path") }))
+        }
+        Err(e) => cors::bad(&e),
+    })
+}
+
+/// REST: remove a site route by `?path=` (admin).
+pub async fn site_remove(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let mut app = match auth::ctx_for(&req, &ctx).await {
+        Ok(c) => c,
+        Err(r) => return Ok(r),
+    };
+    if !auth::require_admin(&app.principal) {
+        return Ok(cors::deny("admin authorization required"));
+    }
+    let path = crate::query::params(&req).get("path").cloned().unwrap_or_default();
+    Ok(match engine::site::route_remove(&mut app.engine, &path).await {
+        Ok(true) => {
+            if let Ok(url) = req.url().map(|u| u.origin().ascii_serialization()) {
+                let full = format!("{}{}", base_trim(&url), path);
+                let _ = worker::Cache::default().delete(full.as_str(), false).await;
+            }
+            cors::ok(serde_json::json!({ "ok": true, "removed": true }))
+        }
+        Ok(false) => cors::gone("no such route"),
+        Err(e) => cors::bad(&e),
+    })
+}
+
+fn base_trim(url: &str) -> String {
+    url.trim_end_matches('/').to_string()
 }
 
 pub(crate) fn sha256_hex(bytes: &[u8]) -> String {

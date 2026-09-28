@@ -109,3 +109,40 @@ No code: a route declares an operation on a plugin table. Served at
 What stays outside the engine on purpose: arbitrary JS execution
 (workerd forbids dynamic code — platform rule), raw SMTP/IMAP sockets
 (HTTPS mail APIs cover it).
+
+## Site routes (exact paths) + request proxy
+
+One worker = one app = one site: no shim worker for sitemap/robots/root.
+Manifest keys (validated up front, conflicts fail the install):
+
+```json
+"site_routes": [
+  { "path": "/sitemap.xml", "op": "query", "table": "plugins",
+    "format": "sitemap", "url_field": "slug", "prefix": "/p/", "limit": 5000 },
+  { "path": "/robots.txt", "text": "User-agent: *\nAllow: /\n" },
+  { "path": "/", "redirect": "/srv/", "status": 302 },
+  { "path": "/manual.pdf", "asset": "docs/manual.pdf" }
+],
+"request_routes": [
+  { "path": "/docs/*", "op": "proxy", "target": "https://cdn.example.com/{{$.path}}",
+    "inject_headers": { "x-tenant": "{{$.tenant}}" } }
+]
+```
+
+Rules: paths start with `/`; exact beats longest-`/*`-prefix;
+`/api/*`, `/mcp`, `/srv/*`, `/ws`, `/healthz` are reserved (rejected).
+Same path twice (any owner) is a conflict error. Site routes are PUBLIC
+surface: query ops run as anonymous (only anonymously-readable data is
+servable — private tables fail loudly, never silently empty). Validators
+(ETag/304) and edge caching apply uniformly; dynamic query routes default
+to short `s-maxage` (overridable per route).
+
+Proxy notes: method allowlist per binding (default GET), query forwarded
+unless the template embeds `{{$.query}}`, bodies to 5 MiB, upstream
+`Authorization`/`Cookie` never forwarded (use `inject_headers` for
+upstream auth), targets SSRF-gated like `$call`, upstream status + bytes
+passed through. Proxy responses are never edge-cached (dynamic upstream).
+
+Manage live: `site routes|add|remove` (MCP/terminal — same grammar family),
+`GET|POST|DELETE /api/site/routes` (REST). Tenant-owned vs
+`plugin:<slug>`-owned shown everywhere; plugin removal prunes its rows.

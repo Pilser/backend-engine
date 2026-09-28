@@ -231,6 +231,19 @@ curl -H "$K" -X POST $BASE/api/secrets -d '{"name":"OAUTH_CLIENT_ID","value":"<i
 - [x] fixed adjacent leak: MCP `keys.show` exposed `key_hash`/`salt`
 - [x] tests updated; native + `--tests` + wasm green, graphs clean
 
+## Custom domain cleared (2026-09-28) — routing fixed, all engine
+
+- After their routing fix: `/`, `/mcp`, `/srv/*`, `/api/*` on
+  demoride.pilserlabs.com all reach the engine (redirect/setup/serve all
+  correct, credentials fine throughout — never a credential problem).
+- Earlier homepage-bytes on `/srv/*`: asset store was EMPTY (verified) —
+  a platform fallback served homepage content for missing paths, not the
+  engine. PUT→GET→DELETE→404 cycle on the custom domain now behaves
+  identically to workers.dev, incl. `304` on computed ETags.
+- ETag/s-maxage absent on 200s on BOTH hosts while 304s prove the worker
+  computes them: egress-side stripping (zone Transform Rules / Managed
+  Headers prime suspect). No engine change; dashboard check on their side.
+
 ## Production probe (2026-09-28) — live demoride tenant, own D1+R2
 
 - Worker logic PROVEN correct on real Cloudflare: computed-sha

@@ -131,11 +131,15 @@ Manifest keys (validated up front, conflicts fail the install):
 
 Rules: paths start with `/`; exact beats longest-`/*`-prefix;
 `/api/*`, `/mcp`, `/srv/*`, `/ws`, `/healthz` are reserved (rejected).
-Same path twice (any owner) is a conflict error. Site routes are PUBLIC
-surface: query ops run as anonymous (only anonymously-readable data is
-servable — private tables fail loudly, never silently empty). Validators
-(ETag/304) and edge caching apply uniformly; dynamic query routes default
-to short `s-maxage` (overridable per route).
+Same path twice (any owner) is a conflict error. Site routes are public
+BY DEFAULT (anonymous + edge-cacheable). Per route, `allow_roles` tunes
+it: absent/empty stays public; `["reader"]` (or writer/admin) switches to
+keyed mode — caller must hold the tier, reads follow the caller (not
+anonymous), nothing is shared-cached (`private, max-age=0`). Unknown role
+names are rejected at write time. Scoped customer keys are not admitted
+(use unscoped reader+ keys for keyed routes). Validators (ETag/304) apply
+uniformly; dynamic query routes default to short `s-maxage` (overridable
+per route).
 
 Proxy notes: method allowlist per binding (default GET), query forwarded
 unless the template embeds `{{$.query}}`, bodies to 5 MiB, upstream

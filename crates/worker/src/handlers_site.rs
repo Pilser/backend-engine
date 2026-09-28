@@ -19,6 +19,17 @@ pub async fn srv_root(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     Ok(cors::redirect_to("/srv/"))
 }
 
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(64);
+    for b in Sha256::digest(bytes) {
+        out.push(HEX[(b >> 4) as usize] as char);
+        out.push(HEX[(b & 0x0f) as usize] as char);
+    }
+    out
+}
+
 fn has_file_ext(path: &str) -> bool {
     let name = path.rsplit('/').next().unwrap_or(path);
     let Some(dot) = name.rfind('.') else {
@@ -103,22 +114,17 @@ pub async fn serve(req: Request, ctx: RouteContext<()>) -> Result<Response> {
         }
     }
 
-    // Phase 1: metadata first (cheap head) — a validator match answers
-    // 304 without ever reading the bytes.
-    let mut found: Option<(String, engine::storage::object_store::BlobMeta)> = None;
+    // Read once; the ETag is always the hash of the FINAL served bytes
+    // (post `<base>` injection), so validators are exact on every adapter
+    // and every transform — verifiable with any local sha256sum.
+    let mut fetched: Option<(Vec<u8>, String)> = None;
     for cand in &candidates {
-        if let Ok(Some(m)) = app.engine.head_asset(cand).await {
-            found = Some((cand.clone(), m));
+        if let Ok(Some((data, ct))) = app.engine.get_asset(cand).await {
+            fetched = Some((data, ct));
             break;
         }
     }
-    let Some((path, meta)) = found else {
-        return Ok(cors::gone("not found"));
-    };
-    if cors::etag_matches(&req, &meta.sha256) {
-        return Ok(cors::not_modified(&meta.sha256));
-    }
-    let Some((data, content_type)) = app.engine.get_asset(&path).await.unwrap_or(None) else {
+    let Some((data, content_type)) = fetched else {
         return Ok(cors::gone("not found"));
     };
     let is_html = content_type.starts_with("text/html");
@@ -131,6 +137,10 @@ pub async fn serve(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     } else {
         (data, "public, max-age=3600")
     };
+    let etag = sha256_hex(&body);
+    if cors::etag_matches(&req, &etag) {
+        return Ok(cors::not_modified(&etag));
+    }
     // Shared-cache lifetime rides alongside (never instead of) the browser
     // directive; HTML revalidates fast so deploys surface, hashed assets
     // linger (exact-URL invalidation on put keeps them correct).
@@ -142,7 +152,7 @@ pub async fn serve(req: Request, ctx: RouteContext<()>) -> Result<Response> {
             .unwrap_or(default)
     };
     if !public {
-        return Ok(cors::asset_bytes(body, &content_type, cache, &meta.sha256));
+        return Ok(cors::asset_bytes(body, &content_type, cache, &etag));
     }
     let smax = if is_html {
         s_maxage(60, "ASSETS_S_MAXAGE_HTML")
@@ -150,7 +160,7 @@ pub async fn serve(req: Request, ctx: RouteContext<()>) -> Result<Response> {
         s_maxage(86400, "ASSETS_S_MAXAGE")
     };
     let cache = format!("{cache}, s-maxage={smax}");
-    let cached = cors::asset_bytes(body.clone(), &content_type, &cache, &meta.sha256);
+    let cached = cors::asset_bytes(body.clone(), &content_type, &cache, &etag);
     let _ = worker::Cache::default().put(url.as_str(), cached).await;
-    Ok(cors::asset_bytes(body, &content_type, &cache, &meta.sha256))
+    Ok(cors::asset_bytes(body, &content_type, &cache, &etag))
 }

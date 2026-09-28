@@ -124,3 +124,19 @@ exact `mcpServers` snippet for your deployment, auth included:
 
 Full route surface: `GET /mcp` on your deployment, or the `endpoints.list` MCP tool.
 Source + guides: https://github.com/Pilser/backend-engine
+
+## Files vs assets (two stores — don't mix them)
+
+- **Files** (`POST /api/upload`, `GET /api/file`): record-backed blobs —
+  user uploads, attachments, form files. Listed per table, validated,
+  permission-checked like records.
+- **Assets** (`PUT /api/assets/*`, `GET /api/assets/*`, served at `/srv/*`):
+  front-end hosting — HTML/JS/CSS. Served with ETags + `304`s and edge
+  cache (public apps); purged from cache on every put/delete.
+
+They are different namespaces: `files delete x` never touches `/srv/x`.
+Deploy front-ends with `PUT /api/assets/*` (or `scripts/publish-frontend.sh`
+in the repo); manage uploads with the files verbs. The edge cache is the
+Worker Cache API (`caches.default`, isolate-adjacent) driven by `s-maxage`
+— there is no `cf-cache-status` header to watch; correctness comes from
+exact-URL invalidation on write, not from edge observability.

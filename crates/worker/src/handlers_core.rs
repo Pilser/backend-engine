@@ -435,18 +435,16 @@ pub async fn asset_get(req: Request, ctx: RouteContext<()>) -> Result<Response> 
     if !tenant.public_reads && !auth::require_read(&app.principal) {
         return Ok(cors::deny("private app"));
     }
-    let etag = app
-        .engine
-        .head_asset(&rel)
-        .await
-        .unwrap_or(None)
-        .map(|m| m.sha256)
-        .unwrap_or_default();
-    if cors::etag_matches(&req, &etag) {
-        return Ok(cors::not_modified(&etag));
-    }
+    // Validator = hash of the served bytes (uniform with /srv/): exact on
+    // every adapter, verifiable with sha256sum. One read either way.
     Ok(match app.engine.get_asset(&rel).await {
-        Ok(Some((data, ct))) => cors::asset_bytes(data, &ct, "public, max-age=3600", &etag),
+        Ok(Some((data, ct))) => {
+            let etag = crate::handlers_site::sha256_hex(&data);
+            if cors::etag_matches(&req, &etag) {
+                return Ok(cors::not_modified(&etag));
+            }
+            cors::asset_bytes(data, &ct, "public, max-age=3600", &etag)
+        }
         Ok(None) => cors::gone("not found"),
         Err(e) => cors::bad(&e),
     })

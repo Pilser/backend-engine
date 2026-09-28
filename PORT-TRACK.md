@@ -231,6 +231,18 @@ curl -H "$K" -X POST $BASE/api/secrets -d '{"name":"OAUTH_CLIENT_ID","value":"<i
 - [x] fixed adjacent leak: MCP `keys.show` exposed `key_hash`/`salt`
 - [x] tests updated; native + `--tests` + wasm green, graphs clean
 
+## Cache tester feedback (2026-09-27) — wrong-store tests + real HTML bug
+
+- Their invalidation repro used `files` verbs against `/srv/` URLs: two
+  different namespaces (files/ vs assets/), so "stale" was expected and
+  `/api/assets/*` 404s were correct. Fix is docs, not code: npm README
+  now has "Files vs assets". Their acceptance (put→GET→put→GET→delete→404)
+  is right — run it against `/api/assets/*`.
+- REAL bug from the same report: HTML ETag was the pre-injection hash
+  (unverifiable, confusing). Now the ETag is always the hash of the FINAL
+  served bytes (uniform rule, both doors) — one storage read either way,
+  so the head-optimization was dropped as complexity without savings.
+
 ## Edge cache + validators (2026-09-27) — /srv/* cost program
 
 - Phase 1: blob hash → ETag on every asset (memory sha256, R2 http_etag

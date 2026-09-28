@@ -8,6 +8,6 @@
     "deploy": "wrangler deploy"
   },
   "dependencies": {
-    "@pilser/backend-engine": "^0.3.6"
+    "@pilser/backend-engine": "^0.3.7"
   }
 }

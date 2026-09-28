@@ -231,6 +231,14 @@ curl -H "$K" -X POST $BASE/api/secrets -d '{"name":"OAUTH_CLIENT_ID","value":"<i
 - [x] fixed adjacent leak: MCP `keys.show` exposed `key_hash`/`salt`
 - [x] tests updated; native + `--tests` + wasm green, graphs clean
 
+## Keyed site routes (2026-09-28) — allow_roles knob, public default
+
+- `allow_roles` per route (validated at write, unknown names rejected):
+  absent = public anonymous + edge-cached (unchanged); listed tiers =
+  keyed mode (role gate, caller-view reads via table gates, private
+  cache directives, never shared-cached). Scoped customer keys excluded
+  by design. ETag/304 identical both ways.
+
 ## Site routes + request proxy (2026-09-28) — zero-shim single tenant
 
 - `site_routes` (redirect/text/asset/query incl. sitemap format) +

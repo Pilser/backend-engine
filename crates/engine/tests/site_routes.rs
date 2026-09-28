@@ -20,6 +20,23 @@ fn path_rules() {
 }
 
 #[test]
+fn allow_roles_tiers() {
+    use engine::site::{parse_allow_roles, role_allowed};
+    let r = |s: &str| vec![s.to_string()];
+    assert!(role_allowed("reader", &r("reader")));
+    assert!(role_allowed("writer", &r("reader")));
+    assert!(role_allowed("admin", &r("writer")));
+    assert!(role_allowed("owner", &r("admin")));
+    assert!(!role_allowed("reader", &r("writer")));
+    assert!(!role_allowed("none", &r("reader")));
+    assert!(role_allowed("anon", &[])); // empty = public
+    assert!(role_allowed("reader", &[]));
+    assert!(parse_allow_roles(&json!({"allow_roles": ["reader", "bogus"]})).is_err());
+    assert!(parse_allow_roles(&json!({"allow_roles": "reader"})).is_err());
+    assert!(parse_allow_roles(&json!({})).unwrap().is_empty());
+}
+
+#[test]
 fn render_helpers() {
     let xml = engine::site::render_sitemap(
         "https://x.example.com",

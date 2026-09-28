@@ -72,13 +72,22 @@ async fn dispatch_site(req: Request, ctx: RouteContext<()>, row: serde_json::Val
             return Ok(cors::err(405, &format!("route allows {want}")));
         }
     }
-    // Site routes are PUBLIC surface by design (SEO, exact paths). Auth is
-    // intentionally not consulted; data routes additionally enforce
-    // anonymous readability below.
+    // Site routes are public BY DEFAULT (SEO, exact paths): no allow_roles
+    // means anonymous + edge-cacheable. Listed tiers switch to keyed mode:
+    // caller must hold a tier, reads follow the caller (not anonymous),
+    // and nothing is shared-cached. Scoped customer keys are not admitted.
     let mut app = match auth::ctx_for(&req, &ctx).await {
         Ok(c) => c,
         Err(r) => return Ok(r),
     };
+    let allow = match engine::site::parse_allow_roles(&spec) {
+        Ok(a) => a,
+        Err(_) => return Ok(cors::deny("route misconfigured")),
+    };
+    let keyed = !allow.is_empty();
+    if keyed && !engine::site::role_allowed(&app.principal.role, &allow) {
+        return Ok(cors::deny("route requires a key"));
+    }
     match kind {
         "redirect" => {
             let to = spec.get("to").and_then(|v| v.as_str()).unwrap_or("/srv/");
@@ -96,11 +105,18 @@ async fn dispatch_site(req: Request, ctx: RouteContext<()>, row: serde_json::Val
             }
             let smax = spec.get("s_maxage").and_then(|v| v.as_u64()).unwrap_or(3600);
             let cache = format!("public, max-age=3600, s-maxage={smax}");
-            let mut res = cors::asset_bytes(bytes.clone(), &ct, &cache, &etag);
+            let mut res = cors::asset_bytes(
+                bytes.clone(),
+                &ct,
+                &if keyed { "private, max-age=0".to_string() } else { cache.clone() },
+                &etag,
+            );
             apply_headers(res.headers_mut(), spec.get("headers").unwrap_or(&serde_json::Value::Null));
-            if let Ok(url) = req.url().map(|u| u.to_string()) {
-                let cached = cors::asset_bytes(bytes, &ct, &cache, &etag);
-                let _ = worker::Cache::default().put(url.as_str(), cached).await;
+            if !keyed {
+                if let Ok(url) = req.url().map(|u| u.to_string()) {
+                    let cached = cors::asset_bytes(bytes, &ct, &cache, &etag);
+                    let _ = worker::Cache::default().put(url.as_str(), cached).await;
+                }
             }
             Ok(res)
         }
@@ -117,23 +133,27 @@ async fn dispatch_site(req: Request, ctx: RouteContext<()>, row: serde_json::Val
             } else {
                 format!("public, max-age=3600, s-maxage={smax}")
             };
-            respond_bytes(&req, data, &ct, &cache, &spec).await
+            respond_bytes(&req, data, &ct, (!keyed).then(|| cache), &spec).await
         }
         "query" => {
             let table = spec.get("table").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            // Public surface: only anonymously-readable data is servable.
-            // Fail loudly (not silently empty) so misconfigurations show.
-            let tenant_public = app.engine.tenant().await.map(|t| t.public_reads).unwrap_or(false);
-            let open = app
-                .engine
-                .get_table(&table)
-                .await
-                .ok()
-                .flatten()
-                .map(|c| c.anon_read_open(tenant_public))
-                .unwrap_or(false);
+            // Public routes serve the anonymous view (fail loudly, never
+            // silently empty, so misconfigurations show). Keyed routes
+            // serve the caller's view through the normal table gates.
+            let open = if keyed {
+                auth::can_table_read(&mut app, &table).await
+            } else {
+                let tenant_public = app.engine.tenant().await.map(|t| t.public_reads).unwrap_or(false);
+                app.engine
+                    .get_table(&table)
+                    .await
+                    .ok()
+                    .flatten()
+                    .map(|c| c.anon_read_open(tenant_public))
+                    .unwrap_or(false)
+            };
             if !open {
-                return Ok(cors::deny("route table not public"));
+                return Ok(cors::deny(if keyed { "private app" } else { "route table not public" }));
             }
             let limit = spec.get("limit").and_then(|v| v.as_u64()).unwrap_or(100).clamp(1, 5000) as usize;
             let filter_json = spec.get("filter").cloned().unwrap_or(serde_json::Value::Null);
@@ -179,7 +199,7 @@ async fn dispatch_site(req: Request, ctx: RouteContext<()>, row: serde_json::Val
             };
             let smax = spec.get("s_maxage").and_then(|v| v.as_u64()).unwrap_or(60);
             let cache = format!("public, max-age=0, s-maxage={smax}");
-            respond_bytes(&req, body, &ct, &cache, &spec).await
+            respond_bytes(&req, body, &ct, (!keyed).then(|| cache), &spec).await
         }
         "proxy" => proxy_route(req, &mut app, &spec, route_path, &method).await,
         _ => Ok(cors::err(500, "unsupported site route kind")),
@@ -311,23 +331,28 @@ async fn proxy_route(
         .or_else(|_| Ok(cors::err(502, "response encode failed")))
 }
 
-/// Shared responder: ETag over final bytes, 304s, edge put (public).
+/// Shared responder: ETag over final bytes, 304s, edge put for public
+/// routes only (`public_cache = None` → `private, max-age=0`, never
+/// shared-cached). Validators are safe either way (no bytes on 304).
 async fn respond_bytes(
     req: &Request,
     data: Vec<u8>,
     ct: &str,
-    cache: &str,
+    public_cache: Option<String>,
     spec: &serde_json::Value,
 ) -> Result<Response> {
     let etag = sha256_hex(&data);
     if cors::etag_matches(req, &etag) {
         return Ok(cors::not_modified(&etag));
     }
-    let mut res = cors::asset_bytes(data.clone(), ct, cache, &etag);
+    let cache = public_cache.unwrap_or_else(|| "private, max-age=0".to_string());
+    let mut res = cors::asset_bytes(data.clone(), ct, &cache, &etag);
     apply_headers(res.headers_mut(), spec.get("headers").unwrap_or(&serde_json::Value::Null));
-    if let Ok(url) = req.url().map(|u| u.to_string()) {
-        let cached = cors::asset_bytes(data, ct, cache, &etag);
-        let _ = worker::Cache::default().put(url.as_str(), cached).await;
+    if cache.starts_with("public") {
+        if let Ok(url) = req.url().map(|u| u.to_string()) {
+            let cached = cors::asset_bytes(data, ct, &cache, &etag);
+            let _ = worker::Cache::default().put(url.as_str(), cached).await;
+        }
     }
     Ok(res)
 }

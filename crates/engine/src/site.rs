@@ -50,6 +50,9 @@ pub fn valid_path(path: &str) -> Result<(), String> {
 
 pub fn valid_spec(spec: &Json) -> Result<(), String> {
     let m = spec.as_object().ok_or_else(|| "route spec must be an object".to_string())?;
+    // Unknown role names fail here, never silently (a typo must not open
+    // or close a route by accident).
+    parse_allow_roles(spec)?;
     let kind = m.get("kind").and_then(|v| v.as_str()).unwrap_or("");
     match kind {
         "redirect" => {
@@ -198,6 +201,52 @@ pub fn render_sitemap(base: &str, prefix: &str, url_field: &str, rows: &[Json]) 
     }
     out.push_str("</urlset>\n");
     out
+}
+
+/// Role tiers for keyed routes (`allow_roles`): `reader` admits
+/// reader/writer/admin/owner, `writer` admits writer/admin/owner, `admin`
+/// admits admin/owner. Absent/empty list = public (anonymous). Pure.
+pub fn role_allowed(principal_role: &str, allow: &[String]) -> bool {
+    if allow.is_empty() {
+        return true;
+    }
+    let tier = |r: &str| match r {
+        "owner" => 3,
+        "admin" => 2,
+        "writer" => 1,
+        "reader" | "list" => 0,
+        _ => -1,
+    };
+    let have = tier(principal_role);
+    have >= 0
+        && allow.iter().any(|w| {
+            let want = match w.as_str() {
+                "reader" | "list" => 0,
+                "writer" => 1,
+                "admin" | "owner" => 2,
+                _ => 99,
+            };
+            want != 99 && have >= want
+        })
+}
+
+/// Extract + validate `allow_roles` (array of known role names, may be
+/// empty = public). Unknown names are rejected at write time, never
+/// silently ignored (a typo must not open or close a route by accident).
+pub fn parse_allow_roles(spec: &Json) -> Result<Vec<String>, String> {
+    let Some(v) = spec.get("allow_roles") else {
+        return Ok(Vec::new());
+    };
+    let arr = v.as_array().ok_or_else(|| "allow_roles must be an array".to_string())?;
+    let mut out = Vec::new();
+    for x in arr {
+        let s = x.as_str().ok_or_else(|| "allow_roles entries must be strings".to_string())?;
+        match s {
+            "reader" | "list" | "writer" | "admin" | "owner" => out.push(s.to_string()),
+            _ => return Err(format!("unknown role '{s}' in allow_roles")),
+        }
+    }
+    Ok(out)
 }
 
 /// Render a proxy target template: `{{$.path}}` (rest after prefix),
